@@ -1626,7 +1626,7 @@ window.__ModuleLoader__.load({
 
         h(Section, {
           title: '任务模型',
-          subtitle: 'OCR 与翻译可以各用一套模型。批量任务用便宜的小模型、主对话用强模型，'
+          subtitle: 'OCR、翻译与阅读可以各用一套模型。批量任务用便宜的小模型、主对话用强模型，'
             + '两边互不影响。留空表示跟随当前会话的默认模型。',
         },
           modelData && modelData.models.length > 0
@@ -1671,8 +1671,28 @@ window.__ModuleLoader__.load({
                   '翻译是纯文本任务，不要求图片能力，所以这里列全部模型；上面的 OCR 才按图片能力筛过。'),
               ),
 
+              // 阅读：ebook_ask 用，读书的 token 花在这个模型上而不是主对话
+              h(Row, { label: '阅读模型（ebook_ask 用）' },
+                h('select', {
+                  style: inputStyle,
+                  disabled: Boolean(busy),
+                  value: modelData.current?.read?.model
+                    ? `${modelData.current.read.provider}|${modelData.current.read.model}`
+                    : '',
+                  onChange: e => saveModel('read', e.target.value),
+                },
+                  h('option', { value: '' }, '跟随会话默认'),
+                  modelData.models.map(item => h('option', {
+                    key: `read:${item.provider}:${item.model}`,
+                    value: `${item.provider}|${item.model}`,
+                  }, `${item.providerName} · ${item.modelName}${modalityTag(item)}`)),
+                ),
+                h('div', { style: { fontSize: 11.5, color: C.dim, lineHeight: 1.5 } },
+                  'ebook_ask 在本地读章节，再交给这个模型整理答案，原文不进主对话——用它把「读书」的 token 从主模型挪到便宜模型上。太长会分批摘录再汇总。'),
+              ),
+
               h('div', { style: { fontSize: 11.5, color: C.dim, lineHeight: 1.6 } },
-                '这些设置只影响插件内部的 OCR 与翻译调用，不改动你当前会话使用的模型。'),
+                '这些设置只影响插件内部的 OCR、翻译与阅读调用，不改动你当前会话使用的模型。'),
 
               // 翻译执行方式
               h('div', {

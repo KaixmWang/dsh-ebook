@@ -2,6 +2,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { loadImage, createCanvas } from '@napi-rs/canvas'
 import { downloadRow } from './sources/index.js'
 import { extractEpub, isEpub, extractCover } from './extract/epub.js'
 import { openPdf, extractText, detectScanned, renderPages, parsePageSpec } from './extract/pdf.js'
@@ -178,6 +179,40 @@ export async function ensureCover(params) {
 }
 
 /**
+ * 读出书目录里的封面，转成 EPUB 能用的格式（只认 JPEG / PNG）。
+ *
+ * 封面可能来自 EPUB 内嵌图、PDF 首页渲染，或联网选的豆瓣图（webp / gif 都有），
+ * 所以这里统一转一道：遇到 webp / gif 用 canvas 转成 PNG，转不了就放弃封面。
+ *
+ * @param {string} dir 书目录。
+ * @returns {Promise<{data:Buffer, mediaType:string, name:string}|null>}
+ */
+export async function loadEpubCover(dir) {
+  for (const ext of ['jpg', 'jpeg', 'png']) {
+    const file = join(dir, `cover.${ext}`)
+    if (!existsSync(file)) continue
+    try {
+      return {
+        data: readFileSync(file),
+        mediaType: ext === 'png' ? 'image/png' : 'image/jpeg',
+        name: `cover.${ext}`,
+      }
+    } catch { /* 读不了就看下一张 */ }
+  }
+  for (const ext of ['webp', 'gif']) {
+    const file = join(dir, `cover.${ext}`)
+    if (!existsSync(file)) continue
+    try {
+      const image = await loadImage(readFileSync(file))
+      const canvas = createCanvas(image.width, image.height)
+      canvas.getContext('2d').drawImage(image, 0, 0)
+      return { data: canvas.toBuffer('image/png'), mediaType: 'image/png', name: 'cover.png' }
+    } catch { /* 转不了就放弃封面 */ }
+  }
+  return null
+}
+
+/**
  * 决定原始文件的落盘名。
  *
  * 优先用服务器 Content-Disposition 给的名字（最接近「原名」），
@@ -318,14 +353,16 @@ export async function ingest(deps, row, options = {}) {
     }
   }
 
+  // 封面：EPUB 抽内嵌图、PDF 渲染首页，供书库界面展示；它也要嵌进生成的 EPUB
+  const coverPath = await ensureCover({ dir, format, buffer: download.buffer })
+  if (coverPath) log(`封面已生成：${basename(coverPath)}`)
+  const cover = await loadEpubCover(dir)
+
   const markdown = writeMarkdown(dir, { ...meta, translated: options.translated }, chapters)
   // 原始文件本身就是 EPUB 时不再生成一份内容重复的成品，省一半磁盘
   const epubPath = format === 'epub' ? null : join(dir, 'book.epub')
-  if (epubPath) writeEpub(epubPath, { ...meta, id: randomUUID(), source: download.url }, chapters)
-
-  // 封面：EPUB 抽内嵌图、PDF 渲染首页，供书库界面展示
-  const coverPath = await ensureCover({ dir, format, buffer: download.buffer })
-  if (coverPath) log(`封面已生成：${basename(coverPath)}`)
+  if (epubPath) writeEpub(epubPath, { ...meta, id: randomUUID(), source: download.url }, chapters, { cover })
+  if (epubPath && cover) log('封面已写入 book.epub')
 
   // 内部数据统一放私有子目录，书目录里只看得到书本身
   const dataDir = library.dataDir(dir)
@@ -594,9 +631,15 @@ export async function translateBook(deps, name, options = {}) {
     const targetLang = /^(简体中文|繁体中文|中文)$/.test(target) ? 'zh' : target
     writeFileSync(join(dir, `book.${targetLang}.md`),
       `# ${manifest.title}（${target}译本）\n\n${parts.join('\n\n')}`, 'utf8')
-    writeEpub(join(dir, `book.${targetLang}.epub`),
-      { title: manifest.title, creator: manifest.creator, language: /中文/.test(target) ? 'zh' : 'en', id: randomUUID() },
-      translatedChapters)
+    // 译本沿用原书封面，否则推送到微信读书 / 打开阅读器时是一张白板
+    const cover = await loadEpubCover(dir)
+    writeEpub(join(dir, `book.${targetLang}.epub`), {
+      title: `${manifest.title}（${target}译本）`,
+      creator: manifest.creator,
+      language: /中文/.test(target) ? 'zh' : 'en',
+      id: randomUUID(),
+    }, translatedChapters, { cover })
+    if (cover) log('译本已嵌入封面')
     library.writeMeta(dir, { translated: target, translatedChapters: parts.length })
   }
 

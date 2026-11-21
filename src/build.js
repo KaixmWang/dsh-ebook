@@ -162,11 +162,18 @@ export function writeMarkdown(bookDir, book, chapters) {
  * @param {string} outPath 输出路径。
  * @param {object} book 书信息。
  * @param {Array<{title:string, text:string}>} chapters 章节。
+ * @param {object} [options] 选项。
+ * @param {{data:Buffer, mediaType:string, name?:string}} [options.cover] 封面图（只支持 png/jpeg）。
  */
-export function writeEpub(outPath, book, chapters) {
+export function writeEpub(outPath, book, chapters, options = {}) {
   const esc = s => String(s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
+
+  const cover = options.cover && options.cover.data?.length ? options.cover : null
+  const coverHref = cover
+    ? `images/cover.${cover.mediaType === 'image/png' ? 'png' : 'jpg'}`
+    : ''
 
   const uuid = `urn:uuid:${book.id ?? '00000000-0000-4000-8000-000000000000'}`
   const files = [
@@ -180,9 +187,11 @@ export function writeEpub(outPath, book, chapters) {
       data: `body{font-family:serif;line-height:1.7;margin:1em}
 h1,h2,h3{font-weight:600;margin:1.2em 0 .6em}
 p{margin:0 0 .8em;text-indent:2em}
-p.noindent{text-indent:0}`,
+p.noindent{text-indent:0}
+.cover{display:block;margin:0 auto;max-width:100%;height:auto}`,
     },
   ]
+  if (cover) files.push({ name: `OEBPS/${coverHref}`, data: cover.data })
 
   const manifestItems = []
   const spineItems = []
@@ -219,6 +228,23 @@ ${chapters.map((c, i) => `<li><a href="text/ch${String(i + 1).padStart(4, '0')}.
   manifestItems.push('<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>')
   manifestItems.push('<item id="css" href="style.css" media-type="text/css"/>')
 
+  // 封面：EPUB3 用 properties="cover-image"，同时保留 EPUB2 的 meta name="cover"，
+  // 再加一页 cover.xhtml 放在 spine 最前，阅读器一打开就是封面
+  if (cover) {
+    files.push({
+      name: 'OEBPS/cover.xhtml',
+      data: `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" xml:lang="${esc(book.language || 'zh')}">
+<head><meta charset="utf-8"/><title>封面</title><link rel="stylesheet" type="text/css" href="style.css"/></head>
+<body><section epub:type="cover"><img class="cover" src="${coverHref}" alt="${esc(book.title)}"/></section></body>
+</html>`,
+    })
+    manifestItems.push(`<item id="cover-image" href="${coverHref}" media-type="${cover.mediaType}" properties="cover-image"/>`)
+    manifestItems.push('<item id="cover-page" href="cover.xhtml" media-type="application/xhtml+xml"/>')
+    spineItems.unshift('<itemref idref="cover-page" linear="yes"/>')
+  }
+
   const opf = `<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
@@ -227,6 +253,7 @@ ${chapters.map((c, i) => `<li><a href="text/ch${String(i + 1).padStart(4, '0')}.
     ${book.creator ? `<dc:creator>${esc(book.creator)}</dc:creator>` : ''}
     <dc:language>${esc(book.language || 'zh')}</dc:language>
     ${book.source ? `<dc:source>${esc(book.source)}</dc:source>` : ''}
+    ${cover ? '<meta name="cover" content="cover-image"/>' : ''}
     <meta property="dcterms:modified">${new Date().toISOString().replace(/\.\d+Z$/, 'Z')}</meta>
   </metadata>
   <manifest>

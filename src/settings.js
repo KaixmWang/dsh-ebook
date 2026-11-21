@@ -55,7 +55,7 @@ export class Settings {
     this.data = {
       libraryDir: '',
       accounts: [],
-      models: { ocr: emptyModel(), translate: emptyModel() },
+      models: { ocr: emptyModel(), translate: emptyModel(), read: emptyModel() },
       // 翻译是否交给子代理执行（独立会话，主对话看不到正文）
       translateViaSubagent: false,
       // 是否在侧栏显示书库图标（关闭后需要重启 DSH 才消失）
@@ -80,6 +80,7 @@ export class Settings {
         models: {
           ocr: normalizeModel(parsed.models?.ocr),
           translate: normalizeModel(parsed.models?.translate),
+          read: normalizeModel(parsed.models?.read),
         },
         translateViaSubagent: parsed.translateViaSubagent === true,
         showSidebarIcon: parsed.showSidebarIcon !== false,
@@ -212,29 +213,30 @@ export class Settings {
 
   /**
    * 读某个用途的模型指定。
-   * @param {'ocr'|'translate'} role 用途。
+   * @param {'ocr'|'translate'|'read'} role 用途。
    * @returns {{provider:string, model:string}}
    */
   modelFor(role) {
     return { ...(this.data.models?.[role] ?? emptyModel()) }
   }
 
-  /** @returns {{ocr:{provider:string,model:string}, translate:{provider:string,model:string}}} */
+  /** @returns {{ocr:object, translate:object, read:object}} 各用途的模型指定。 */
   allModels() {
     return {
       ocr: this.modelFor('ocr'),
       translate: this.modelFor('translate'),
+      read: this.modelFor('read'),
     }
   }
 
   /**
    * 保存某个用途的模型指定。留空即「跟随会话默认」。
-   * @param {'ocr'|'translate'} role 用途。
+   * @param {'ocr'|'translate'|'read'} role 用途。
    * @param {object} value 指定。
    * @returns {{provider:string, model:string}}
    */
   setModel(role, value) {
-    if (!this.data.models) this.data.models = { ocr: emptyModel(), translate: emptyModel() }
+    if (!this.data.models) this.data.models = { ocr: emptyModel(), translate: emptyModel(), read: emptyModel() }
     this.data.models[role] = normalizeModel(value)
     this.save()
     return this.modelFor(role)

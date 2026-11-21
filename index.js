@@ -37,6 +37,11 @@ export const Config = z.object({
       provider: z.string().default(''),
       model: z.string().default(''),
     }),
+    // 阅读模型：ebook_ask 用它读书并整理答案，原文不进主对话
+    read: z.object({
+      provider: z.string().default(''),
+      model: z.string().default(''),
+    }),
   }),
   zlib: z.object({
     domain: z.string().default(''),
@@ -103,6 +108,8 @@ export function apply(ctx, config) {
         model: config.llm?.model ?? '',
         ocr: pickModel(models.ocr, config.llm?.ocr),
         translate: pickModel(models.translate, config.llm?.translate),
+        // 「阅读」模型：ebook_ask 在本地读书后只把答案带回，原文不进主对话
+        read: pickModel(models.read, config.llm?.read),
       },
       // 翻译是否走子代理（设置页开关）
       viaSubagent: settings.translateViaSubagent,

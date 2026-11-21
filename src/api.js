@@ -1186,8 +1186,8 @@ export function registerSettingsApi(ctx, deps) {
       if (path === '/models' && method === 'POST') {
         const body = await readJson(req)
         const role = String(body.role ?? '')
-        if (role !== 'ocr' && role !== 'translate') {
-          sendJson(res, 400, { error: '用途只能是 ocr 或 translate' })
+        if (!['ocr', 'translate', 'read'].includes(role)) {
+          sendJson(res, 400, { error: '用途只能是 ocr、translate 或 read' })
           return
         }
         const value = body.value && typeof body.value === 'object' ? body.value : {}

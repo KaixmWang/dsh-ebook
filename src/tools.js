@@ -1,7 +1,8 @@
-/** 工具定义：给 Agent 调用的 5 个能力。 */
+/** 工具定义：给 Agent 调用的能力。 */
 import { join } from 'node:path'
 import { searchAll, sourceNames } from './sources/index.js'
 import { ingest, readChapters, translateBook } from './pipeline.js'
+import { askBook } from './reading.js'
 
 /**
  * 统一的文本输出渲染。
@@ -124,9 +125,34 @@ export function createTools(deps) {
     },
 
     {
+      name: 'ebook_ask',
+      description:
+        '就书库里的一本书提问：插件在本地读章节，交给「阅读模型」整理后只把答案带回来，原文不占主对话 token。'
+        + '适合「这本书讲了什么」「作者怎么论证 X」「第三部分的关键结论」这类问题；'
+        + '需要逐字原文时才用 ebook_read。阅读模型在插件设置里单独指定（默认跟随会话模型），'
+        + '长书会分批摘录再汇总。',
+      parameters: objectSchema({
+        title: { type: 'string', description: '书名，可只给片段' },
+        question: { type: 'string', description: '要问的问题' },
+        start: { type: 'number', description: '起始章（1 起），默认全书' },
+        end: { type: 'number', description: '结束章' },
+        maxChars: { type: 'number', description: '最多读多少字，默认 240000' },
+      }, ['title', 'question']),
+      output: { schema: { type: 'object' }, render: textRender },
+      timeoutMs: 900_000,
+      execute: async (args, exec) => askBook(
+        { library: lib(), ai, log, signal: exec.signal },
+        String(args.title),
+        String(args.question),
+        { start: args.start, end: args.end, maxChars: args.maxChars },
+      ),
+    },
+
+    {
       name: 'ebook_read',
       description:
-        '按章读取库内的书给模型读。默认一次 3 章、上限 30000 字，返回 nextStart 供继续。读整本书请分批调用。',
+        '按章读取库内的书给模型读。默认一次 3 章、上限 30000 字，返回 nextStart 供继续。'
+        + '注意：原文会进入主对话并随每轮重发，读整本很费 token；只想问问题请用 ebook_ask。',
       parameters: objectSchema({
         title: { type: 'string', description: '书名，可只给片段' },
         start: { type: 'number', description: '起始章（1 起），默认 1' },
