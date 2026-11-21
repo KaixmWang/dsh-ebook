@@ -1,6 +1,6 @@
 # dsh-ebook
 
-给人和 AI 读的电子书库：**搜书 → 取书 → OCR → 翻译 → 进阅读器**。
+DeepSeek Harness插件，给人和 AI 读的电子书库：**搜书 → 取书 → OCR → 翻译 → 推送微信读书**。
 EPUB / PDF 解析后产出 Markdown 分章（给模型读）与人可读的 EPUB，前端有一个封面书库。
 
 ## 安装
