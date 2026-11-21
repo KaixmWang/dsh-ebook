@@ -1,0 +1,20 @@
+# 依赖与构建产物
+node_modules/
+*.tgz
+
+# 本地验证脚手架（按需重建）
+.tmp-test/
+_verify/
+_pack-check/
+
+# 本地书库与插件数据（凭据在 $DSH_HOME/dsh-ebook，也不该进仓库）
+书库/
+settings.json
+*.part
+
+# 编辑器 / 系统
+.DS_Store
+Thumbs.db
+*.log
+.vscode/
+.idea/

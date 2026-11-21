@@ -1,0 +1,8 @@
+# 统一换行，避免 Windows 提交把整份文件变成 CRLF
+* text=auto eol=lf
+
+# 二进制
+*.png binary
+*.jpg binary
+*.svg text
+*.tgz binary

@@ -1,0 +1,13 @@
+# 不写死任何本机路径：书库目录由设置页保存到 $DSH_HOME/dsh-ebook/settings.json，
+# 首次启动用 Config 的默认值（~/Documents/dsh-ebook-library）。
+# OPDS 默认只监听回环地址；要给手机或阅读器用，把 host 改成 0.0.0.0
+# （OPDS 没有鉴权，改之前先确认网络环境）。
+- insert:
+    - id: dsh-ebook
+      name: dsh-ebook
+      config:
+        proxy: auto
+        opds:
+          port: 8899
+          host: 127.0.0.1
+          autoStart: true

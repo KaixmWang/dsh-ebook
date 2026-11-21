@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Ebook library",
+    "description": "Search and download books from multiple sources, OCR scanned pages, translate chapter by chapter, then browse a cover gallery with auto-filled covers and blurbs and push books to WeRead or open them locally.",
+    "detail": "docs/DETAIL.md"
+  }
+}
