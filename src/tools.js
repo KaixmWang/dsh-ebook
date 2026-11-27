@@ -30,12 +30,13 @@ function objectSchema(properties, required = []) {
  * @param {() => object} deps.getConfig 取当前配置（设置页的账号与目录会覆盖静态配置）。
  * @param {() => object} deps.getLibrary 取当前书库（设置里可切换目录，所以每次现取）。
  * @param {object} deps.ai AI 客户端。
- * @param {(line:string)=>void} deps.log 日志。
- * @param {Map<string, any>} deps.servers 运行中的 OPDS 服务。
+ * @param {object} deps.log 日志。
+ * @param {object} [deps.localOcr] 本地 OCR 管理器。
+ * @param {object} [deps.opdsServer] 阅读器（OPDS）管理器。
  * @returns {Array<object>}
  */
 export function createTools(deps) {
-  const { getConfig, getLibrary, ai, subagents, log, servers, localOcr } = deps
+  const { getConfig, getLibrary, ai, subagents, log, localOcr, opdsServer } = deps
   const lib = () => getLibrary()
   const cfg = () => getConfig()
 
@@ -186,7 +187,8 @@ export function createTools(deps) {
           root: current.root,
           count: books.length,
           books,
-          opds: [...new Set([...servers.values()].map(server => server.url))],
+          // 阅读器（OPDS）在跑时给出可用地址；没开就是空数组
+          opds: opdsServer?.status?.().urls ?? [],
         }
       },
     },

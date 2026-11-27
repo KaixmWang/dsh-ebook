@@ -528,7 +528,7 @@ function checkDirectory(dir) {
 export function registerSettingsApi(ctx, deps) {
   const {
     settings, getLibrary, switchLibrary, dataDir, llm, log = () => {},
-    ai, translateText, localOcr, updateChecker,
+    ai, translateText, localOcr, opdsServer, updateChecker,
   } = deps
 
   const handler = async (req, res) => {
@@ -1309,6 +1309,94 @@ export function registerSettingsApi(ctx, deps) {
         }
         const status = await updateChecker.check({ force: true })
         sendJson(res, 200, status)
+        return
+      }
+
+      // ===== 阅读器（OPDS） =====
+
+      // 状态：是否在跑、地址、二维码
+      if (path === '/opds' && method === 'GET') {
+        if (!opdsServer) {
+          sendJson(res, 503, { error: '当前环境没有 OPDS 能力' })
+          return
+        }
+        const status = opdsServer.status()
+        if (status.running && status.urls[0]) {
+          status.qr = await renderQr(status.urls[0]).catch(() => '')
+        }
+        sendJson(res, 200, status)
+        return
+      }
+
+      // 启动 / 停止 / 改端口与监听地址
+      if (path === '/opds' && method === 'POST') {
+        if (!opdsServer) {
+          sendJson(res, 503, { error: '当前环境没有 OPDS 能力' })
+          return
+        }
+        const body = await readJson(req)
+        const patch = {}
+        if (body.port !== undefined) {
+          const port = Number(body.port)
+          if (!Number.isInteger(port) || port < 0 || port > 65535) {
+            sendJson(res, 400, { error: '端口必须是 0–65535 之间的整数' })
+            return
+          }
+          patch.port = port
+        }
+        if (body.host !== undefined) {
+          const host = String(body.host)
+          if (!['127.0.0.1', '0.0.0.0', '::1', 'localhost'].includes(host)) {
+            sendJson(res, 400, { error: '监听地址只能是 127.0.0.1 或 0.0.0.0' })
+            return
+          }
+          patch.host = host
+        }
+        if (body.autoStart !== undefined) {
+          if (typeof body.autoStart !== 'boolean') {
+            sendJson(res, 400, { error: 'autoStart 必须是布尔值' })
+            return
+          }
+          patch.autoStart = body.autoStart
+        }
+        if (body.running !== undefined && typeof body.running !== 'boolean') {
+          sendJson(res, 400, { error: 'running 必须是布尔值' })
+          return
+        }
+
+        let status
+        try {
+          if (Object.keys(patch).length > 0) status = await opdsServer.apply(patch)
+          if (typeof body.running === 'boolean') {
+            status = body.running ? await opdsServer.start() : await opdsServer.stop()
+          }
+        } catch (error) {
+          sendJson(res, 409, { error: error.message, status: opdsServer.status() })
+          return
+        }
+        status = status ?? opdsServer.status()
+        if (status.running && status.urls[0]) {
+          status.qr = await renderQr(status.urls[0]).catch(() => '')
+        }
+        sendJson(res, 200, {
+          ...status,
+          message: status.running ? '阅读器目录已开启' : '阅读器目录已关闭',
+        })
+        return
+      }
+
+      // 单个地址的二维码（局域网地址切换时用）
+      if (path === '/opds/qr' && method === 'GET') {
+        const target = url.searchParams.get('url') ?? ''
+        if (!/^https?:\/\/\S+/.test(target) || !target.includes('/opds')) {
+          sendJson(res, 400, { error: '只能为 OPDS 地址生成二维码' })
+          return
+        }
+        try {
+          sendJson(res, 200, { image: await renderQr(target) })
+        } catch (error) {
+          sendJson(res, 500, { error: `生成二维码失败：${error.message}` })
+        }
         return
       }
 

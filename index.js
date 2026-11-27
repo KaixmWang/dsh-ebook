@@ -7,7 +7,7 @@ import { Library } from './src/store.js'
 import { Settings } from './src/settings.js'
 import { createAi, translateText } from './src/ai.js'
 import { createTools } from './src/tools.js'
-import { startOpds } from './src/opds.js'
+import { OpdsServer } from './src/opds-server.js'
 import { registerSettingsApi } from './src/api.js'
 import { configureNetwork } from './src/http.js'
 import { ingest, translateBook } from './src/pipeline.js'
@@ -145,42 +145,29 @@ export function apply(ctx, config) {
     getAttachments: () => attachments,
     getDefaultSelection: () => defaultSelection?.(),
   })
-  const servers = new Map()
   // 本地 OCR（Xiaomi-OCR-0）：模型与 llama.cpp 都由插件自己下载、自己起服务
   const localOcr = new LocalOcr({ dataDir, settings, log })
+  // 阅读器（OPDS）：默认只听回环，设置页可开/关、改端口、开局域网
+  const opdsServer = new OpdsServer({ settings, config, getLibrary, log })
   // 检查更新：只查 GitHub Releases 并提示，不自动安装
   const updateChecker = new ReleaseChecker({ log })
-  const tools = createTools({ getConfig, getLibrary, ai, subagents: ctx.subagents, log, servers, localOcr })
+  const tools = createTools({ getConfig, getLibrary, ai, subagents: ctx.subagents, log, localOcr, opdsServer })
 
   ctx.effect(() => {
     const disposers = tools.map(definition => ctx.tools.register(definition))
     let disposed = false
 
-    if (config.opds?.autoStart) {
-      const port = config.opds.port ?? 8899
-      // 传 getter 而不是实例：切换书库后 OPDS 也要跟着换目录
-      startOpds({ library: getLibrary, port, host: config.opds.host ?? '127.0.0.1' })
-        .then(server => {
-          if (disposed) {
-            server.close().catch(() => {})
-            return
-          }
-          servers.set(String(port), server)
-          servers.set(String(server.port), server)
-          log(`OPDS 已启动：${server.url}`)
-        })
-        .catch(error => log(`OPDS 自启动失败（端口 ${port}）：${error.message}`))
-    }
+    // 按 autoStart 决定是否随插件加载就起；失败只记状态，不阻塞插件
+    opdsServer.ensureAutoStart().catch(() => {})
 
     return () => {
       disposed = true
       for (const dispose of disposers) {
         try { dispose() } catch { /* 注册器已卸载 */ }
       }
-      for (const server of new Set(servers.values())) server.close().catch(() => {})
-      servers.clear()
       // 本地 OCR 的 llama-server 是自己起的子进程，卸载时要收掉
       localOcr.dispose().catch(() => {})
+      opdsServer.dispose().catch(() => {})
     }
   })
 
@@ -198,6 +185,7 @@ export function apply(ctx, config) {
           ai,
           translateText,
           localOcr,
+          opdsServer,
           updateChecker,
           switchLibrary: dir => {
             current = new Library(dir)

@@ -1140,6 +1140,12 @@ window.__ModuleLoader__.load({
       // 检查更新
       const [updateInfo, setUpdateInfo] = useState(null)
       const [updateBusy, setUpdateBusy] = useState(false)
+      // 阅读器（OPDS）
+      const [opdsInfo, setOpdsInfo] = useState(null)
+      const [opdsPort, setOpdsPort] = useState('')
+      const [opdsLan, setOpdsLan] = useState(false)
+      const [opdsAutoStart, setOpdsAutoStart] = useState(true)
+      const [opdsBusy, setOpdsBusy] = useState('')
       const [wereadDraft, setWereadDraft] = useState({ vid: '', refreshToken: '', deviceId: '' })
       const [confirmClearWeread, setConfirmClearWeread] = useState(false)
 
@@ -1208,6 +1214,72 @@ window.__ModuleLoader__.load({
           // 离线或宿主不支持时静默
         }
       }, [])
+
+      /** 拉阅读器（OPDS）状态。 */
+      const loadOpds = useCallback(async () => {
+        try {
+          const info = await callApi('/opds')
+          setOpdsInfo(info)
+          setOpdsPort(String(info.port ?? ''))
+          setOpdsLan(info.lan === true)
+          setOpdsAutoStart(info.autoStart !== false)
+        } catch {
+          setOpdsInfo(null)
+        }
+      }, [])
+
+      /** 启停阅读器目录。 */
+      const toggleOpds = async running => {
+        setOpdsBusy('toggle')
+        setError('')
+        try {
+          const result = await callApi('/opds', {
+            method: 'POST',
+            body: JSON.stringify({ running }),
+          })
+          setOpdsInfo(result)
+          setNotice(result.message)
+        } catch (e) {
+          setError(e.message)
+          loadOpds()
+        } finally {
+          setOpdsBusy('')
+        }
+      }
+
+      /** 保存端口 / 监听地址 / 自启，必要时重启服务。 */
+      const saveOpds = async () => {
+        setOpdsBusy('save')
+        setError('')
+        try {
+          const result = await callApi('/opds', {
+            method: 'POST',
+            body: JSON.stringify({
+              port: Number(opdsPort),
+              host: opdsLan ? '0.0.0.0' : '127.0.0.1',
+              autoStart: opdsAutoStart,
+            }),
+          })
+          setOpdsInfo(result)
+          setOpdsPort(String(result.port ?? ''))
+          setNotice('阅读器设置已保存')
+        } catch (e) {
+          setError(e.message)
+          loadOpds()
+        } finally {
+          setOpdsBusy('')
+        }
+      }
+
+      /** 复制地址到剪贴板。 */
+      const copyAddress = async address => {
+        try {
+          await navigator.clipboard.writeText(address)
+          setNotice('地址已复制')
+        } catch {
+          setError('复制失败，请手动选中地址')
+        }
+      }
 
       /** 手动检查一次更新。 */
       const checkUpdate = async () => {
@@ -1322,6 +1394,7 @@ window.__ModuleLoader__.load({
 
       useEffect(() => { loadModels() }, [loadModels])
       useEffect(() => { loadLocalOcr() }, [loadLocalOcr])
+      useEffect(() => { loadOpds() }, [loadOpds])
       // 只读缓存；联网检查由用户点按钮触发（POST /update/check）
       useEffect(() => { loadUpdate() }, [loadUpdate])
 
@@ -2079,6 +2152,114 @@ window.__ModuleLoader__.load({
 
           h('div', { style: { fontSize: 11.5, color: C.dim, lineHeight: 1.6 } },
             'LibGen 有多个镜像，只要有一个可用就能取书；全不可用时检查代理。'),
+        ),
+
+        h(Section, {
+          title: '阅读器（OPDS）',
+          subtitle: '给 KOReader / 静读天下 / Moon+ 用的书库目录。开启后，在阅读器里「添加 OPDS 目录」并把地址填进去即可。',
+        },
+          opdsInfo
+            ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10 } },
+              h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 12.5 } },
+                h('span', {
+                  style: {
+                    width: 8, height: 8, borderRadius: 999, flex: 'none',
+                    background: opdsInfo.running ? C.ok : C.dim,
+                  },
+                }),
+                h('span', null, opdsInfo.running ? `运行中 · 端口 ${opdsInfo.port}` : '已停止'),
+                opdsInfo.lan
+                  ? h('span', { style: { fontSize: 11, color: C.warn } }, '局域网可访问（无鉴权）')
+                  : h('span', { style: { fontSize: 11, color: C.dim } }, '仅本机'),
+                h('span', { style: { flex: 1 } }),
+                h('button', {
+                  type: 'button',
+                  style: button(opdsInfo.running ? undefined : 'primary'),
+                  disabled: opdsBusy === 'toggle',
+                  onClick: () => toggleOpds(!opdsInfo.running),
+                }, opdsBusy === 'toggle' ? '处理中…' : (opdsInfo.running ? '停止' : '启动')),
+              ),
+
+              opdsInfo.running && opdsInfo.urls?.length
+                ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6 } },
+                  opdsInfo.urls.map(address => h('div', {
+                    key: address,
+                    style: { display: 'flex', alignItems: 'center', gap: 8 },
+                  },
+                    h('code', {
+                      style: {
+                        flex: 1, fontSize: 11.5, padding: '4px 8px', borderRadius: 6,
+                        background: C.layer1, border: `1px solid ${C.border}`,
+                        wordBreak: 'break-all', fontFamily: 'ui-monospace, monospace',
+                      },
+                    }, address),
+                    h('button', {
+                      type: 'button',
+                      style: { ...button(), padding: '2px 10px', fontSize: 11.5 },
+                      onClick: () => copyAddress(address),
+                    }, '复制'),
+                  )),
+                )
+                : h('div', { style: { fontSize: 11.5, color: C.dim, lineHeight: 1.6 } },
+                  '启动后这里会列出可填进阅读器的地址。'),
+
+              opdsInfo.running && opdsInfo.qr
+                ? h('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
+                  h('img', {
+                    src: opdsInfo.qr,
+                    alt: 'OPDS 地址二维码',
+                    style: {
+                      width: 120, height: 120, borderRadius: 6,
+                      background: '#fff', padding: 6, border: `1px solid ${C.border}`,
+                    },
+                  }),
+                  h('div', { style: { fontSize: 11, color: C.dim, lineHeight: 1.7 } },
+                    '手机 / 墨水屏阅读器扫这个二维码会自动填入地址。',
+                    h('br'),
+                    'KOReader：网络 → OPDS 目录 → 添加。'),
+                )
+                : null,
+
+              h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } },
+                h('span', { style: { fontSize: 11.5, color: C.dim } }, '端口'),
+                h('input', {
+                  style: { ...inputStyle, width: 90 },
+                  value: opdsPort,
+                  inputMode: 'numeric',
+                  onChange: e => setOpdsPort(e.target.value.replace(/[^\d]/g, '')),
+                }),
+                h('label', { style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer' } },
+                  h('input', {
+                    type: 'checkbox',
+                    checked: opdsLan,
+                    onChange: e => setOpdsLan(e.target.checked),
+                    style: { cursor: 'pointer' },
+                  }),
+                  '允许局域网访问',
+                ),
+                h('label', { style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer' } },
+                  h('input', {
+                    type: 'checkbox',
+                    checked: opdsAutoStart,
+                    onChange: e => setOpdsAutoStart(e.target.checked),
+                    style: { cursor: 'pointer' },
+                  }),
+                  '随 DSH 启动',
+                ),
+                h('span', { style: { flex: 1 } }),
+                h('button', {
+                  type: 'button',
+                  style: button(),
+                  disabled: opdsBusy === 'save',
+                  onClick: saveOpds,
+                }, opdsBusy === 'save' ? '保存中…' : '保存并重启'),
+              ),
+
+              h('div', { style: { fontSize: 11, color: C.dim, lineHeight: 1.7 } },
+                'OPDS 没有用户名密码：局域网访问只建议在信任的网络里打开。'
+                + '手机与电脑要在同一网段；地址里的 127.0.0.1 只能在本机用。'),
+            )
+            : h('div', { style: { fontSize: 12, color: C.dim } }, '当前环境没有 OPDS 能力。'),
         ),
 
         h(Section, {

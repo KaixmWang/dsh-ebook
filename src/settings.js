@@ -64,6 +64,8 @@ export class Settings {
       weread: { vid: '', refreshToken: '', deviceId: '' },
       // 本地 OCR（Xiaomi-OCR-0）：是否启用，以及识别模式
       localOcr: { enabled: false, mode: 'text' },
+      // 阅读器（OPDS）：留空表示跟随插件 Config，设置页改过就以这里为准
+      opds: { host: '', port: 0, autoStart: null },
     }
     mkdirSync(root, { recursive: true })
     this.load()
@@ -94,6 +96,11 @@ export class Settings {
         localOcr: {
           enabled: parsed.localOcr?.enabled === true,
           mode: parsed.localOcr?.mode === 'document' ? 'document' : 'text',
+        },
+        opds: {
+          host: typeof parsed.opds?.host === 'string' ? parsed.opds.host : '',
+          port: Number.isFinite(Number(parsed.opds?.port)) ? Number(parsed.opds.port) : 0,
+          autoStart: typeof parsed.opds?.autoStart === 'boolean' ? parsed.opds.autoStart : null,
         },
       }
     } catch { /* 损坏就用默认值 */ }
@@ -269,6 +276,36 @@ export class Settings {
     }
     this.save()
     return this.localOcr
+  }
+
+  /** @returns {{host:string, port:number, autoStart:boolean|null}} 阅读器（OPDS）设置；空值表示跟随 Config。 */
+  get opds() {
+    const raw = this.data.opds ?? {}
+    return {
+      host: typeof raw.host === 'string' ? raw.host : '',
+      port: Number.isFinite(Number(raw.port)) ? Number(raw.port) : 0,
+      autoStart: typeof raw.autoStart === 'boolean' ? raw.autoStart : null,
+    }
+  }
+
+  /**
+   * 更新阅读器（OPDS）设置。
+   * @param {object} patch 变更（host / port / autoStart）。
+   * @returns {{host:string, port:number, autoStart:boolean|null}}
+   */
+  setOpds(patch) {
+    const current = this.opds
+    const next = {
+      host: patch?.host === undefined ? current.host : String(patch.host).trim(),
+      port: patch?.port === undefined ? current.port : Number(patch.port),
+      autoStart: patch?.autoStart === undefined ? current.autoStart : patch.autoStart === true,
+    }
+    if (!Number.isFinite(next.port) || next.port < 0 || next.port > 65535) {
+      throw new Error('端口必须是 0–65535 之间的数字')
+    }
+    this.data.opds = next
+    this.save()
+    return this.opds
   }
 
   /** @returns {boolean} 翻译是否走子代理。 */
