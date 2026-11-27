@@ -35,7 +35,7 @@ function objectSchema(properties, required = []) {
  * @returns {Array<object>}
  */
 export function createTools(deps) {
-  const { getConfig, getLibrary, ai, subagents, log, servers } = deps
+  const { getConfig, getLibrary, ai, subagents, log, servers, localOcr } = deps
   const lib = () => getLibrary()
   const cfg = () => getConfig()
 
@@ -91,7 +91,7 @@ export function createTools(deps) {
             }
         if (hasRemote && !args.source) throw new Error('从书源下载时必须同时给 source')
 
-        return ingest({ library: lib(), config: cfg(), ai, log, signal: exec.signal }, row, {
+        return ingest({ library: lib(), config: cfg(), ai, localOcr, log, signal: exec.signal }, row, {
           title: args.title,
           ocr: args.ocr ?? 'auto',
           pages: args.pages,

@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "createdAt": 1795521163424,
+  "org": {
+    "departments": [],
+    "employees": []
+  },
+  "tasks": [],
+  "groups": [],
+  "assistant": {
+    "name": "总裁助理",
+    "messages": [],
+    "busy": false,
+    "persona": "",
+    "caps": [
+      "look",
+      "computer",
+      "web",
+      "schedule",
+      "memory"
+    ],
+    "live": [],
+    "inbox": [],
+    "busyAt": 0,
+    "lastReply": ""
+  },
+  "feishu": {
+    "enabled": false,
+    "chatId": "",
+    "chatName": "",
+    "boundAt": 0,
+    "lastInAt": 0,
+    "lastOutAt": 0,
+    "lastError": "",
+    "syncedIds": [],
+    "appId": "",
+    "appSecret": "",
+    "via": ""
+  },
+  "ui": {
+    "showTrace": false
+  },
+  "schedules": []
+}

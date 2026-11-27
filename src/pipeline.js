@@ -61,7 +61,7 @@ export function detectFormat(buffer, hint) {
  * @returns {Promise<{pages:Array<{page:number,text:string}>, ocr:object}>}
  */
 async function extractPdfContent(deps, buffer, options) {
-  const { ai, log, signal } = deps
+  const { ai, log, signal, localOcr } = deps
   const doc = await openPdf(buffer)
   try {
     const total = doc.numPages
@@ -82,13 +82,32 @@ async function extractPdfContent(deps, buffer, options) {
     const ocrRecord = { applied: false, engine: 'llm-vision', pages: [], failed: [] }
 
     if (ocrPages.length > 0) {
-      if (!ai) throw new Error('当前环境没有可用的 llm 服务，无法识别扫描页')
-      log(`OCR：视觉模型识别 ${ocrPages.length} 页（共 ${total} 页，并发 ${OCR_CONCURRENCY}）`)
+      // 本地模型可用时优先用它：不花 token，慢一点但离线
+      const wantLocal = Boolean(localOcr?.options?.enabled && localOcr.ready)
+      let useLocal = wantLocal
+      if (!wantLocal && !ai) throw new Error('当前环境没有可用的 llm 服务，无法识别扫描页')
+      if (wantLocal) log(`OCR：本地 ${localOcr.status().model.label} 识别 ${ocrPages.length} 页（共 ${total} 页）`)
+      else log(`OCR：视觉模型识别 ${ocrPages.length} 页（共 ${total} 页，并发 ${OCR_CONCURRENCY}）`)
 
+      const engines = new Set()
       const results = await mapConcurrent(ocrPages, OCR_CONCURRENCY, async pageNo => {
         if (signal?.aborted) throw signal.reason ?? new Error('已取消')
         const [rendered] = await renderPages(doc, { pages: [pageNo], scale: 2.2, maxWidth: 1700 })
         if (!rendered) return { page: pageNo, text: '', engine: 'skip' }
+
+        if (useLocal) {
+          try {
+            const text = await localOcr.recognize(rendered.png, { signal })
+            return { page: pageNo, text, engine: 'local' }
+          } catch (error) {
+            if (signal?.aborted) throw signal.reason ?? error
+            if (!ai) throw new Error(`本地 OCR 失败（${error.message}），且没有可用的 llm 服务兜底`)
+            // 本地服务挂了不该让整本书中断：退回视觉模型，后面几页也直接走远端
+            useLocal = false
+            log(`本地 OCR 第 ${pageNo} 页失败（${error.message}），改用视觉模型`)
+          }
+        }
+
         let text = await ocrPage(ai, rendered, { signal })
         if (!text) {
           // 空结果多半是模型瞬时抖动（限流/截断），同一页再试一次再判失败
@@ -107,6 +126,7 @@ async function extractPdfContent(deps, buffer, options) {
           continue
         }
         if (item.engine === 'skip') continue
+        if (item.engine) engines.add(item.engine)
         const target = pages.find(p => p.page === item.page)
         if (target && item.text) target.text = item.text
         if (item.text) {
@@ -115,6 +135,11 @@ async function extractPdfContent(deps, buffer, options) {
         } else {
           ocrRecord.failed.push(item.page)
         }
+      }
+      if (engines.size === 1) {
+        ocrRecord.engine = engines.has('local') ? `local-${localOcr.status().model.label}` : 'llm-vision'
+      } else if (engines.size > 1) {
+        ocrRecord.engine = 'mixed'
       }
       ocrRecord.applied = ocrRecord.pages.length > 0
     }

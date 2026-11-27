@@ -1124,6 +1124,8 @@ window.__ModuleLoader__.load({
       const [sourceBusy, setSourceBusy] = useState(false)
       const [quotas, setQuotas] = useState({})
       const [modelData, setModelData] = useState(null)
+      // 本地 OCR（Xiaomi-OCR-0）：状态、进度都从 /ocr/local 拿
+      const [localOcr, setLocalOcr] = useState(null)
       const [wereadDraft, setWereadDraft] = useState({ vid: '', refreshToken: '', deviceId: '' })
       const [confirmClearWeread, setConfirmClearWeread] = useState(false)
 
@@ -1161,7 +1163,7 @@ window.__ModuleLoader__.load({
 
       /**
        * 保存某个用途的模型指定。
-       * @param {'ocr'|'translate'} role 用途。
+       * @param {'ocr'|'translate'|'read'} role 用途。
        * @param {string} encoded 形如 `provider|model`，空串表示跟随默认。
        */
       const saveModel = (role, encoded) => run(`model-${role}`, async () => {
@@ -1172,6 +1174,60 @@ window.__ModuleLoader__.load({
         })
         await loadModels()
         return { message: encoded ? '已保存，下次该任务就用这个模型' : '已恢复为跟随会话默认' }
+      })
+
+      /** 拉本地 OCR 的状态（安装情况 + 下载进度）。 */
+      const loadLocalOcr = useCallback(async () => {
+        try {
+          setLocalOcr(await callApi('/ocr/local'))
+        } catch {
+          // 宿主不支持本地 OCR 时整块隐藏，不影响其他设置
+          setLocalOcr(null)
+        }
+      }, [])
+
+      /** 本地 OCR 开关。 */
+      const toggleLocalOcr = enabled => run('local-toggle', async () => {
+        const result = await callApi('/ocr/local', {
+          method: 'POST',
+          body: JSON.stringify({ enabled }),
+        })
+        setLocalOcr(result)
+        return { message: result.message, ok: true }
+      })
+
+      /** 本地 OCR 识别模式（纯文本 / 整页 Markdown）。 */
+      const setLocalOcrMode = mode => run('local-mode', async () => {
+        const result = await callApi('/ocr/local', {
+          method: 'POST',
+          body: JSON.stringify({ mode }),
+        })
+        setLocalOcr(result)
+        return { message: mode === 'document' ? '已切换为整页 Markdown 解析' : '已切换为纯文本识别', ok: true }
+      })
+
+      /** 下载本地模型 + 运行库（后台跑，进度靠轮询）。 */
+      const downloadLocalOcr = () => run('local-download', async () => {
+        const result = await callApi('/ocr/local/download', { method: 'POST', body: '{}' })
+        setLocalOcr(result.status)
+        return { message: result.message ?? '开始下载' }
+      })
+
+      /** 取消下载。 */
+      const cancelLocalOcr = () => run('local-cancel', async () => {
+        const result = await callApi('/ocr/local/cancel', { method: 'POST', body: '{}' })
+        setLocalOcr(result.status)
+        return { message: '已取消下载' }
+      })
+
+      /** 删除本地模型与运行库。 */
+      const deleteLocalOcr = () => run('local-delete', async () => {
+        const result = await callApi('/ocr/local/delete', {
+          method: 'POST',
+          body: JSON.stringify({ confirm: true }),
+        })
+        setLocalOcr(result.status)
+        return { message: result.message }
       })
 
       /** 切换翻译执行方式。 */
@@ -1224,6 +1280,14 @@ window.__ModuleLoader__.load({
       }, [state?.accounts?.length, loadQuotas])
 
       useEffect(() => { loadModels() }, [loadModels])
+      useEffect(() => { loadLocalOcr() }, [loadLocalOcr])
+
+      // 下载中每秒刷新一次进度；下完自动停
+      useEffect(() => {
+        if (localOcr?.progress?.state !== 'downloading') return
+        const timer = setInterval(loadLocalOcr, 1000)
+        return () => clearInterval(timer)
+      }, [localOcr?.progress?.state, loadLocalOcr])
 
       /**
        * 跑一个会改状态的异步动作，统一处理忙碌态与提示。
@@ -1384,6 +1448,14 @@ window.__ModuleLoader__.load({
       const accounts = state.accounts ?? []
       const platforms = state.platforms ?? []
       const activePlatform = platforms.find(p => p.id === form.platform)
+
+      // 本地 OCR 的派生状态
+      const localProgress = localOcr?.progress ?? { state: 'idle', percent: 0, message: '' }
+      const localDownloading = localProgress.state === 'downloading'
+      const localInstalled = localOcr?.model?.installed === true && localOcr?.runtime?.installed === true
+      const localModelLabel = localOcr?.modelInfo?.label ?? 'Xiaomi-OCR-0'
+      const localParams = localOcr?.modelInfo?.params ?? '0.8B'
+      const localBytes = (localOcr?.model?.bytes ?? 0) + (localOcr?.runtime?.bytes ?? 0)
 
       return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 14, color: C.text } },
 
@@ -1650,6 +1722,102 @@ window.__ModuleLoader__.load({
                     }, `${item.providerName} · ${item.modelName}${modalityTag(item)}`)),
                 ),
               ),
+
+              // 本地 OCR：Xiaomi-OCR-0（0.8B），下载后离线识别，不花 token
+              localOcr
+                ? h('div', {
+                  style: {
+                    border: `1px solid ${localOcr.enabled && localInstalled ? C.brand : C.border}`,
+                    borderRadius: 8, padding: '10px 12px', background: C.layer2,
+                    display: 'flex', flexDirection: 'column', gap: 8,
+                  },
+                },
+                  h('label', {
+                    style: {
+                      display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+                      fontSize: 12.5, color: C.text, cursor: 'pointer',
+                    },
+                  },
+                    h('input', {
+                      type: 'checkbox',
+                      checked: localOcr.enabled === true,
+                      disabled: Boolean(busy),
+                      onChange: e => toggleLocalOcr(e.target.checked),
+                      style: { cursor: 'pointer' },
+                    }),
+                    `使用本地模型（${localModelLabel} · ${localParams}）`,
+                    localInstalled
+                      ? h('span', { style: { fontSize: 11, color: C.ok } }, `已就绪 · ${formatBytes(localBytes)}`)
+                      : h('span', { style: { fontSize: 11, color: C.dim } }, '未下载'),
+                    h('span', { style: { flex: 1 } }),
+                    localDownloading
+                      ? h('button', {
+                        type: 'button',
+                        style: { ...button(), padding: '2px 10px', fontSize: 11.5 },
+                        disabled: busy === 'local-cancel',
+                        onClick: cancelLocalOcr,
+                      }, busy === 'local-cancel' ? '取消中…' : '取消下载')
+                      : localInstalled
+                        ? h('button', {
+                          type: 'button',
+                          style: { ...button(), padding: '2px 10px', fontSize: 11.5 },
+                          disabled: Boolean(busy),
+                          onClick: deleteLocalOcr,
+                        }, busy === 'local-delete' ? '删除中…' : '删除模型')
+                        : h('button', {
+                          type: 'button',
+                          style: { ...button('primary'), padding: '2px 10px', fontSize: 11.5 },
+                          disabled: Boolean(busy) || localDownloading,
+                          onClick: downloadLocalOcr,
+                        }, busy === 'local-download' ? '启动中…' : '下载模型'),
+                  ),
+
+                  // 进度 / 状态
+                  localDownloading
+                    ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
+                      h('div', {
+                        style: {
+                          height: 4, borderRadius: 999, background: C.border, overflow: 'hidden',
+                        },
+                      }, h('div', {
+                        style: {
+                          height: '100%', width: `${Math.max(2, localProgress.percent ?? 0)}%`,
+                          background: C.brand, transition: 'width .3s ease',
+                        },
+                      })),
+                      h('div', { style: { fontSize: 11, color: C.dim } },
+                        `${localProgress.message || '下载中'}${localProgress.percent ? ` · ${localProgress.percent}%` : ''}`
+                        + (localProgress.received
+                          ? ` · ${formatBytes(localProgress.received)}${localProgress.total ? `/${formatBytes(localProgress.total)}` : ''}`
+                          : '')),
+                    )
+                    : localProgress.state === 'error'
+                      ? h('div', { style: { fontSize: 11, color: C.err, lineHeight: 1.6 } },
+                        `下载失败：${localProgress.message}`)
+                      : h('div', { style: { fontSize: 11, color: C.dim, lineHeight: 1.6 } },
+                        localInstalled
+                          ? `已安装${localOcr.running ? ' · 服务已加载' : ' · 服务按需启动'}，识别不再调用远端模型`
+                          : '首次使用需要下载模型（约 700MB）与 llama.cpp 运行库（约 25MB）。下载后可离线识别扫描件，不消耗 token。'),
+
+                  // 识别模式：纯文本 / 整页 Markdown
+                  localInstalled
+                    ? h(Row, { label: '本地识别模式' },
+                      h('select', {
+                        style: inputStyle,
+                        disabled: Boolean(busy),
+                        value: localOcr.mode === 'document' ? 'document' : 'text',
+                        onChange: e => setLocalOcrMode(e.target.value),
+                      },
+                        h('option', { value: 'text' }, '纯文本（按阅读顺序抽文字）'),
+                        h('option', { value: 'document' }, '整页 Markdown（表格 OTSL、公式 LaTeX）'),
+                      ),
+                    )
+                    : null,
+
+                  h('div', { style: { fontSize: 11, color: C.dim, lineHeight: 1.6 } },
+                    '开启后，扫描件的 OCR 优先走本地模型；本地失败会自动退回上面的视觉模型，不会中断入库。'),
+                )
+                : null,
 
               // 翻译：全部模型可选
               h(Row, { label: '翻译模型' },

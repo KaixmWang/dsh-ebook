@@ -528,7 +528,7 @@ function checkDirectory(dir) {
 export function registerSettingsApi(ctx, deps) {
   const {
     settings, getLibrary, switchLibrary, dataDir, llm, log = () => {},
-    ai, translateText,
+    ai, translateText, localOcr,
   } = deps
 
   const handler = async (req, res) => {
@@ -1196,6 +1196,95 @@ export function registerSettingsApi(ctx, deps) {
           model: String(value.model ?? ''),
         })
         sendJson(res, 200, { ok: true, model: saved })
+        return
+      }
+
+      // ===== 本地 OCR（Xiaomi-OCR-0）=====
+
+      // 状态：安装情况 / 下载进度 / 服务是否在跑
+      if (path === '/ocr/local' && method === 'GET') {
+        if (!localOcr) {
+          sendJson(res, 503, { error: '当前环境没有本地 OCR 能力' })
+          return
+        }
+        sendJson(res, 200, localOcr.status())
+        return
+      }
+
+      // 开关 / 识别模式
+      if (path === '/ocr/local' && method === 'POST') {
+        if (!localOcr) {
+          sendJson(res, 503, { error: '当前环境没有本地 OCR 能力' })
+          return
+        }
+        const body = await readJson(req)
+        if (body.enabled !== undefined && typeof body.enabled !== 'boolean') {
+          sendJson(res, 400, { error: 'enabled 必须是布尔值' })
+          return
+        }
+        if (body.mode !== undefined && !['text', 'document'].includes(String(body.mode))) {
+          sendJson(res, 400, { error: 'mode 只能是 text 或 document' })
+          return
+        }
+        if (typeof body.enabled === 'boolean') localOcr.setEnabled(body.enabled)
+        if (body.mode !== undefined) localOcr.setMode(String(body.mode))
+        const status = localOcr.status()
+        // 提示按「这次改了什么」给，改模式时不要回一句「已启用」
+        let message = ''
+        if (typeof body.enabled === 'boolean') {
+          message = status.enabled
+            ? (status.ready ? '已启用本地模型' : '已启用，但模型还没下载')
+            : '已关闭本地模型，OCR 回到视觉模型'
+        } else if (body.mode !== undefined) {
+          message = status.mode === 'document'
+            ? '已切换为整页 Markdown 解析（表格 OTSL、公式 LaTeX）'
+            : '已切换为纯文本识别'
+        } else {
+          message = '本地 OCR 设置已更新'
+        }
+        sendJson(res, 200, { ...status, message })
+        return
+      }
+
+      // 下载模型 + 运行库（后台跑，前端轮询 /ocr/local 看进度）
+      if (path === '/ocr/local/download' && method === 'POST') {
+        if (!localOcr) {
+          sendJson(res, 503, { error: '当前环境没有本地 OCR 能力' })
+          return
+        }
+        try {
+          const result = localOcr.startDownload()
+          sendJson(res, 202, { ok: true, ...result, status: localOcr.status() })
+        } catch (error) {
+          sendJson(res, 400, { error: error.message })
+        }
+        return
+      }
+
+      // 取消下载
+      if (path === '/ocr/local/cancel' && method === 'POST') {
+        if (!localOcr) {
+          sendJson(res, 503, { error: '当前环境没有本地 OCR 能力' })
+          return
+        }
+        const cancelled = localOcr.cancelDownload()
+        sendJson(res, 200, { ok: true, cancelled, status: localOcr.status() })
+        return
+      }
+
+      // 删除模型与运行库
+      if (path === '/ocr/local/delete' && method === 'POST') {
+        if (!localOcr) {
+          sendJson(res, 503, { error: '当前环境没有本地 OCR 能力' })
+          return
+        }
+        const body = await readJson(req).catch(() => ({}))
+        if (body.confirm !== true) {
+          sendJson(res, 400, { error: '需要 confirm: true 才会删除' })
+          return
+        }
+        const result = await localOcr.remove()
+        sendJson(res, 200, { ok: true, ...result, status: localOcr.status() })
         return
       }
 

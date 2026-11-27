@@ -62,6 +62,8 @@ export class Settings {
       showSidebarIcon: true,
       // 微信读书推送凭据（墨水屏端接口需要）
       weread: { vid: '', refreshToken: '', deviceId: '' },
+      // 本地 OCR（Xiaomi-OCR-0）：是否启用，以及识别模式
+      localOcr: { enabled: false, mode: 'text' },
     }
     mkdirSync(root, { recursive: true })
     this.load()
@@ -88,6 +90,10 @@ export class Settings {
           vid: typeof parsed.weread?.vid === 'string' ? parsed.weread.vid : '',
           refreshToken: typeof parsed.weread?.refreshToken === 'string' ? parsed.weread.refreshToken : '',
           deviceId: typeof parsed.weread?.deviceId === 'string' ? parsed.weread.deviceId : '',
+        },
+        localOcr: {
+          enabled: parsed.localOcr?.enabled === true,
+          mode: parsed.localOcr?.mode === 'document' ? 'document' : 'text',
         },
       }
     } catch { /* 损坏就用默认值 */ }
@@ -240,6 +246,29 @@ export class Settings {
     this.data.models[role] = normalizeModel(value)
     this.save()
     return this.modelFor(role)
+  }
+
+  /** @returns {{enabled:boolean, mode:'text'|'document'}} 本地 OCR（Xiaomi-OCR-0）设置。 */
+  get localOcr() {
+    return {
+      enabled: this.data.localOcr?.enabled === true,
+      mode: this.data.localOcr?.mode === 'document' ? 'document' : 'text',
+    }
+  }
+
+  /**
+   * 更新本地 OCR 设置。
+   * @param {object} patch 变更（enabled / mode）。
+   * @returns {{enabled:boolean, mode:'text'|'document'}}
+   */
+  setLocalOcr(patch) {
+    const current = this.localOcr
+    this.data.localOcr = {
+      enabled: patch?.enabled === undefined ? current.enabled : patch.enabled === true,
+      mode: patch?.mode === 'document' ? 'document' : patch?.mode === 'text' ? 'text' : current.mode,
+    }
+    this.save()
+    return this.localOcr
   }
 
   /** @returns {boolean} 翻译是否走子代理。 */

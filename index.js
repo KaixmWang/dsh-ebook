@@ -11,6 +11,7 @@ import { startOpds } from './src/opds.js'
 import { registerSettingsApi } from './src/api.js'
 import { configureNetwork } from './src/http.js'
 import { ingest, translateBook } from './src/pipeline.js'
+import { LocalOcr } from './src/local/index.js'
 
 export const name = 'dsh-ebook'
 export const inject = ['tools', 'llm', 'subagents']
@@ -144,7 +145,9 @@ export function apply(ctx, config) {
     getDefaultSelection: () => defaultSelection?.(),
   })
   const servers = new Map()
-  const tools = createTools({ getConfig, getLibrary, ai, subagents: ctx.subagents, log, servers })
+  // 本地 OCR（Xiaomi-OCR-0）：模型与 llama.cpp 都由插件自己下载、自己起服务
+  const localOcr = new LocalOcr({ dataDir, settings, log })
+  const tools = createTools({ getConfig, getLibrary, ai, subagents: ctx.subagents, log, servers, localOcr })
 
   ctx.effect(() => {
     const disposers = tools.map(definition => ctx.tools.register(definition))
@@ -173,6 +176,8 @@ export function apply(ctx, config) {
       }
       for (const server of new Set(servers.values())) server.close().catch(() => {})
       servers.clear()
+      // 本地 OCR 的 llama-server 是自己起的子进程，卸载时要收掉
+      localOcr.dispose().catch(() => {})
     }
   })
 
@@ -189,6 +194,7 @@ export function apply(ctx, config) {
           llm: ctx.llm,
           ai,
           translateText,
+          localOcr,
           switchLibrary: dir => {
             current = new Library(dir)
             mkdirSync(current.root, { recursive: true })
