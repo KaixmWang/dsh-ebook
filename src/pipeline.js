@@ -45,7 +45,7 @@ async function mapConcurrent(items, limit, worker) {
  * @param {string} hint 提示扩展名。
  * @returns {string}
  */
-export function detectFormat(buffer, hint) {
+function detectFormat(buffer, hint) {
   if (isEpub(buffer)) return 'epub'
   if (buffer.subarray(0, 5).toString('latin1') === '%PDF-') return 'pdf'
   const lower = String(hint ?? '').toLowerCase()
@@ -83,19 +83,27 @@ async function extractPdfContent(deps, buffer, options) {
 
     if (ocrPages.length > 0) {
       // 本地模型可用时优先用它：不花 token，慢一点但离线
-      const wantLocal = Boolean(localOcr?.options?.enabled && localOcr.ready)
-      let useLocal = wantLocal
-      if (!wantLocal && !ai) throw new Error('当前环境没有可用的 llm 服务，无法识别扫描页')
-      if (wantLocal) log(`OCR：本地 ${localOcr.status().model.label} 识别 ${ocrPages.length} 页（共 ${total} 页）`)
-      else log(`OCR：视觉模型识别 ${ocrPages.length} 页（共 ${total} 页，并发 ${OCR_CONCURRENCY}）`)
+      const localWanted = localOcr?.options?.enabled === true
+      const localReady = localWanted && Boolean(localOcr?.ready)
+      if (localWanted && !localReady) log('本地 OCR 已启用但模型未就绪，本次用视觉模型')
+      let useLocal = localReady
+      if (!useLocal && !ai) throw new Error('当前环境没有可用的 llm 服务，无法识别扫描页')
+
+      const localLabel = localOcr?.status?.().model?.label ?? 'local'
+      // llama-server 默认单 slot，并发只会排队堆积；本地跑 1 页，远端才并行
+      const concurrency = useLocal ? 1 : OCR_CONCURRENCY
+      if (useLocal) log(`OCR：本地 ${localLabel} 识别 ${ocrPages.length} 页（共 ${total} 页，逐页串行）`)
+      else log(`OCR：视觉模型识别 ${ocrPages.length} 页（共 ${total} 页，并发 ${concurrency}）`)
 
       const engines = new Set()
-      const results = await mapConcurrent(ocrPages, OCR_CONCURRENCY, async pageNo => {
+      const attempted = new Set()
+      const results = await mapConcurrent(ocrPages, concurrency, async pageNo => {
         if (signal?.aborted) throw signal.reason ?? new Error('已取消')
         const [rendered] = await renderPages(doc, { pages: [pageNo], scale: 2.2, maxWidth: 1700 })
         if (!rendered) return { page: pageNo, text: '', engine: 'skip' }
 
         if (useLocal) {
+          attempted.add('local')
           try {
             const text = await localOcr.recognize(rendered.png, { signal })
             return { page: pageNo, text, engine: 'local' }
@@ -108,6 +116,7 @@ async function extractPdfContent(deps, buffer, options) {
           }
         }
 
+        attempted.add('llm')
         let text = await ocrPage(ai, rendered, { signal })
         if (!text) {
           // 空结果多半是模型瞬时抖动（限流/截断），同一页再试一次再判失败
@@ -136,9 +145,15 @@ async function extractPdfContent(deps, buffer, options) {
           ocrRecord.failed.push(item.page)
         }
       }
+
+      // 引擎标记：优先看成功的页；整批都失败时按「实际尝试过什么」记，免得误判
       if (engines.size === 1) {
-        ocrRecord.engine = engines.has('local') ? `local-${localOcr.status().model.label}` : 'llm-vision'
+        ocrRecord.engine = engines.has('local') ? `local-${localLabel}` : 'llm-vision'
       } else if (engines.size > 1) {
+        ocrRecord.engine = 'mixed'
+      } else if (attempted.size === 1) {
+        ocrRecord.engine = attempted.has('local') ? `local-${localLabel}` : 'llm-vision'
+      } else if (attempted.size > 1) {
         ocrRecord.engine = 'mixed'
       }
       ocrRecord.applied = ocrRecord.pages.length > 0
@@ -162,7 +177,7 @@ async function extractPdfContent(deps, buffer, options) {
  * @param {Buffer} params.buffer 原始文件字节。
  * @returns {Promise<string|null>} 封面文件路径，或 null。
  */
-export async function ensureCover(params) {
+async function ensureCover(params) {
   const { dir, format, buffer } = params
 
   // 已有任意 cover.* 就直接用
@@ -212,7 +227,7 @@ export async function ensureCover(params) {
  * @param {string} dir 书目录。
  * @returns {Promise<{data:Buffer, mediaType:string, name:string}|null>}
  */
-export async function loadEpubCover(dir) {
+async function loadEpubCover(dir) {
   for (const ext of ['jpg', 'jpeg', 'png']) {
     const file = join(dir, `cover.${ext}`)
     if (!existsSync(file)) continue

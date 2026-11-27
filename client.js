@@ -133,6 +133,17 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * 在系统浏览器里打开链接（设置页里的发布页入口）。
+     * @param {string} url 地址。
+     */
+    function openExternal(url) {
+      if (!url) return
+      try {
+        window.open(url, '_blank', 'noopener,noreferrer')
+      } catch { /* 打不开就算了 */ }
+    }
+
+    /**
      * 格式化文件体积。
      * @param {number} bytes 字节数。
      * @returns {string}
@@ -1126,6 +1137,9 @@ window.__ModuleLoader__.load({
       const [modelData, setModelData] = useState(null)
       // 本地 OCR（Xiaomi-OCR-0）：状态、进度都从 /ocr/local 拿
       const [localOcr, setLocalOcr] = useState(null)
+      // 检查更新
+      const [updateInfo, setUpdateInfo] = useState(null)
+      const [updateBusy, setUpdateBusy] = useState(false)
       const [wereadDraft, setWereadDraft] = useState({ vid: '', refreshToken: '', deviceId: '' })
       const [confirmClearWeread, setConfirmClearWeread] = useState(false)
 
@@ -1185,6 +1199,33 @@ window.__ModuleLoader__.load({
           setLocalOcr(null)
         }
       }, [])
+
+      /** 拉更新状态（缓存 + 后台检查进度）。 */
+      const loadUpdate = useCallback(async () => {
+        try {
+          setUpdateInfo(await callApi('/update'))
+        } catch {
+          // 离线或宿主不支持时静默
+        }
+      }, [])
+
+      /** 手动检查一次更新。 */
+      const checkUpdate = async () => {
+        setUpdateBusy(true)
+        setError('')
+        setNotice('')
+        try {
+          const result = await callApi('/update/check', { method: 'POST', body: '{}' })
+          setUpdateInfo(result)
+          if (result.error) setError(`检查更新失败：${result.error}`)
+          else if (result.hasUpdate) setNotice(`发现新版本 v${result.latest}`)
+          else setNotice('已是最新版本')
+        } catch (e) {
+          setError(e.message)
+        } finally {
+          setUpdateBusy(false)
+        }
+      }
 
       /** 本地 OCR 开关。 */
       const toggleLocalOcr = enabled => run('local-toggle', async () => {
@@ -1281,6 +1322,14 @@ window.__ModuleLoader__.load({
 
       useEffect(() => { loadModels() }, [loadModels])
       useEffect(() => { loadLocalOcr() }, [loadLocalOcr])
+      useEffect(() => { loadUpdate() }, [loadUpdate])
+
+      // 后台检查更新时轮询结果，拿到就停
+      useEffect(() => {
+        if (!updateInfo?.checking) return
+        const timer = setInterval(loadUpdate, 2000)
+        return () => clearInterval(timer)
+      }, [updateInfo?.checking, loadUpdate])
 
       // 下载中每秒刷新一次进度；下完自动停
       useEffect(() => {
@@ -1456,6 +1505,102 @@ window.__ModuleLoader__.load({
       const localModelLabel = localOcr?.modelInfo?.label ?? 'Xiaomi-OCR-0'
       const localParams = localOcr?.modelInfo?.params ?? '0.8B'
       const localBytes = (localOcr?.model?.bytes ?? 0) + (localOcr?.runtime?.bytes ?? 0)
+
+      // 本地 OCR 区块：不依赖 LLM 模型列表，单独算好后再放进「任务模型」区
+      const localOcrSection = localOcr
+        ? h('div', {
+          style: {
+            border: `1px solid ${localOcr.enabled && localInstalled ? C.brand : C.border}`,
+            borderRadius: 8, padding: '10px 12px', background: C.layer2,
+            display: 'flex', flexDirection: 'column', gap: 8,
+          },
+        },
+          h('label', {
+            style: {
+              display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+              fontSize: 12.5, color: C.text, cursor: 'pointer',
+            },
+          },
+            h('input', {
+              type: 'checkbox',
+              checked: localOcr.enabled === true,
+              disabled: Boolean(busy),
+              onChange: e => toggleLocalOcr(e.target.checked),
+              style: { cursor: 'pointer' },
+            }),
+            `使用本地模型（${localModelLabel} · ${localParams}）`,
+            localInstalled
+              ? h('span', { style: { fontSize: 11, color: C.ok } }, `已就绪 · ${formatBytes(localBytes)}`)
+              : h('span', { style: { fontSize: 11, color: C.dim } }, '未下载'),
+            h('span', { style: { flex: 1 } }),
+            localDownloading
+              ? h('button', {
+                type: 'button',
+                style: { ...button(), padding: '2px 10px', fontSize: 11.5 },
+                disabled: busy === 'local-cancel',
+                onClick: cancelLocalOcr,
+              }, busy === 'local-cancel' ? '取消中…' : '取消下载')
+              : localInstalled
+                ? h('button', {
+                  type: 'button',
+                  style: { ...button(), padding: '2px 10px', fontSize: 11.5 },
+                  disabled: Boolean(busy),
+                  onClick: deleteLocalOcr,
+                }, busy === 'local-delete' ? '删除中…' : '删除模型')
+                : h('button', {
+                  type: 'button',
+                  style: { ...button('primary'), padding: '2px 10px', fontSize: 11.5 },
+                  disabled: Boolean(busy) || localDownloading,
+                  onClick: downloadLocalOcr,
+                }, busy === 'local-download' ? '启动中…' : '下载模型'),
+          ),
+
+          // 进度 / 状态
+          localDownloading
+            ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
+              h('div', {
+                style: {
+                  height: 4, borderRadius: 999, background: C.border, overflow: 'hidden',
+                },
+              }, h('div', {
+                style: {
+                  height: '100%', width: `${Math.max(2, localProgress.percent ?? 0)}%`,
+                  background: C.brand, transition: 'width .3s ease',
+                },
+              })),
+              h('div', { style: { fontSize: 11, color: C.dim } },
+                `${localProgress.message || '下载中'}${localProgress.percent ? ` · ${localProgress.percent}%` : ''}`
+                + (localProgress.received
+                  ? ` · ${formatBytes(localProgress.received)}${localProgress.total ? `/${formatBytes(localProgress.total)}` : ''}`
+                  : '')),
+            )
+            : localProgress.state === 'error'
+              ? h('div', { style: { fontSize: 11, color: C.err, lineHeight: 1.6 } },
+                `下载失败：${localProgress.message}`)
+              : h('div', { style: { fontSize: 11, color: C.dim, lineHeight: 1.6 } },
+                localInstalled
+                  ? `已安装${localOcr.running ? ' · 服务已加载' : ' · 服务按需启动'}，识别不再调用远端模型`
+                  : '首次使用需要下载模型（约 700MB）与 llama.cpp 运行库（约 25MB）。下载后可离线识别扫描件，不消耗 token。'),
+
+          // 识别模式：纯文本 / 整页 Markdown
+          localInstalled
+            ? h(Row, { label: '本地识别模式' },
+              h('select', {
+                style: inputStyle,
+                disabled: Boolean(busy),
+                value: localOcr.mode === 'document' ? 'document' : 'text',
+                onChange: e => setLocalOcrMode(e.target.value),
+              },
+                h('option', { value: 'text' }, '纯文本（按阅读顺序抽文字）'),
+                h('option', { value: 'document' }, '整页 Markdown（表格 OTSL、公式 LaTeX）'),
+              ),
+            )
+            : null,
+
+          h('div', { style: { fontSize: 11, color: C.dim, lineHeight: 1.6 } },
+            '开启后，扫描件的 OCR 优先走本地模型；本地失败会自动退回上面的视觉模型，不会中断入库。'),
+        )
+        : null
 
       return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 14, color: C.text } },
 
@@ -1701,8 +1846,9 @@ window.__ModuleLoader__.load({
           subtitle: 'OCR、翻译与阅读可以各用一套模型。批量任务用便宜的小模型、主对话用强模型，'
             + '两边互不影响。留空表示跟随当前会话的默认模型。',
         },
-          modelData && modelData.models.length > 0
-            ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 12 } },
+          h('div', { style: { display: 'flex', flexDirection: 'column', gap: 12 } },
+            modelData && modelData.models.length > 0
+              ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 12 } },
               // OCR：只列明确支持图片的模型
               h(Row, { label: 'OCR 模型（需要图片输入能力）' },
                 h('select', {
@@ -1722,102 +1868,6 @@ window.__ModuleLoader__.load({
                     }, `${item.providerName} · ${item.modelName}${modalityTag(item)}`)),
                 ),
               ),
-
-              // 本地 OCR：Xiaomi-OCR-0（0.8B），下载后离线识别，不花 token
-              localOcr
-                ? h('div', {
-                  style: {
-                    border: `1px solid ${localOcr.enabled && localInstalled ? C.brand : C.border}`,
-                    borderRadius: 8, padding: '10px 12px', background: C.layer2,
-                    display: 'flex', flexDirection: 'column', gap: 8,
-                  },
-                },
-                  h('label', {
-                    style: {
-                      display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
-                      fontSize: 12.5, color: C.text, cursor: 'pointer',
-                    },
-                  },
-                    h('input', {
-                      type: 'checkbox',
-                      checked: localOcr.enabled === true,
-                      disabled: Boolean(busy),
-                      onChange: e => toggleLocalOcr(e.target.checked),
-                      style: { cursor: 'pointer' },
-                    }),
-                    `使用本地模型（${localModelLabel} · ${localParams}）`,
-                    localInstalled
-                      ? h('span', { style: { fontSize: 11, color: C.ok } }, `已就绪 · ${formatBytes(localBytes)}`)
-                      : h('span', { style: { fontSize: 11, color: C.dim } }, '未下载'),
-                    h('span', { style: { flex: 1 } }),
-                    localDownloading
-                      ? h('button', {
-                        type: 'button',
-                        style: { ...button(), padding: '2px 10px', fontSize: 11.5 },
-                        disabled: busy === 'local-cancel',
-                        onClick: cancelLocalOcr,
-                      }, busy === 'local-cancel' ? '取消中…' : '取消下载')
-                      : localInstalled
-                        ? h('button', {
-                          type: 'button',
-                          style: { ...button(), padding: '2px 10px', fontSize: 11.5 },
-                          disabled: Boolean(busy),
-                          onClick: deleteLocalOcr,
-                        }, busy === 'local-delete' ? '删除中…' : '删除模型')
-                        : h('button', {
-                          type: 'button',
-                          style: { ...button('primary'), padding: '2px 10px', fontSize: 11.5 },
-                          disabled: Boolean(busy) || localDownloading,
-                          onClick: downloadLocalOcr,
-                        }, busy === 'local-download' ? '启动中…' : '下载模型'),
-                  ),
-
-                  // 进度 / 状态
-                  localDownloading
-                    ? h('div', { style: { display: 'flex', flexDirection: 'column', gap: 4 } },
-                      h('div', {
-                        style: {
-                          height: 4, borderRadius: 999, background: C.border, overflow: 'hidden',
-                        },
-                      }, h('div', {
-                        style: {
-                          height: '100%', width: `${Math.max(2, localProgress.percent ?? 0)}%`,
-                          background: C.brand, transition: 'width .3s ease',
-                        },
-                      })),
-                      h('div', { style: { fontSize: 11, color: C.dim } },
-                        `${localProgress.message || '下载中'}${localProgress.percent ? ` · ${localProgress.percent}%` : ''}`
-                        + (localProgress.received
-                          ? ` · ${formatBytes(localProgress.received)}${localProgress.total ? `/${formatBytes(localProgress.total)}` : ''}`
-                          : '')),
-                    )
-                    : localProgress.state === 'error'
-                      ? h('div', { style: { fontSize: 11, color: C.err, lineHeight: 1.6 } },
-                        `下载失败：${localProgress.message}`)
-                      : h('div', { style: { fontSize: 11, color: C.dim, lineHeight: 1.6 } },
-                        localInstalled
-                          ? `已安装${localOcr.running ? ' · 服务已加载' : ' · 服务按需启动'}，识别不再调用远端模型`
-                          : '首次使用需要下载模型（约 700MB）与 llama.cpp 运行库（约 25MB）。下载后可离线识别扫描件，不消耗 token。'),
-
-                  // 识别模式：纯文本 / 整页 Markdown
-                  localInstalled
-                    ? h(Row, { label: '本地识别模式' },
-                      h('select', {
-                        style: inputStyle,
-                        disabled: Boolean(busy),
-                        value: localOcr.mode === 'document' ? 'document' : 'text',
-                        onChange: e => setLocalOcrMode(e.target.value),
-                      },
-                        h('option', { value: 'text' }, '纯文本（按阅读顺序抽文字）'),
-                        h('option', { value: 'document' }, '整页 Markdown（表格 OTSL、公式 LaTeX）'),
-                      ),
-                    )
-                    : null,
-
-                  h('div', { style: { fontSize: 11, color: C.dim, lineHeight: 1.6 } },
-                    '开启后，扫描件的 OCR 优先走本地模型；本地失败会自动退回上面的视觉模型，不会中断入库。'),
-                )
-                : null,
 
               // 翻译：全部模型可选
               h(Row, { label: '翻译模型' },
@@ -1861,8 +1911,13 @@ window.__ModuleLoader__.load({
 
               h('div', { style: { fontSize: 11.5, color: C.dim, lineHeight: 1.6 } },
                 '这些设置只影响插件内部的 OCR、翻译与阅读调用，不改动你当前会话使用的模型。'),
+              )
+              : h('div', { style: { fontSize: 12, color: C.dim } },
+                '没有读到可用模型列表——可以直接在插件配置里填 llm.ocr / llm.translate；下面的本地模型不受影响。'),
 
-              // 翻译执行方式
+            localOcrSection,
+
+            // 翻译执行方式
               h('div', {
                 style: {
                   borderTop: `1px solid ${C.border}`, paddingTop: 10,
@@ -1915,9 +1970,7 @@ window.__ModuleLoader__.load({
                 h('div', { style: { fontSize: 11.5, color: C.dim, lineHeight: 1.6 } },
                   '关掉后书库面板仍在，只是侧栏不再放入口。改动要重启 DSH 才生效。'),
               ),
-            )
-            : h('div', { style: { fontSize: 12, color: C.dim } },
-              '没有读到可用模型列表——可以直接在插件配置里填 llm.ocr / llm.translate。'),
+          ),
         ),
 
         h(Section, {
@@ -2032,6 +2085,63 @@ window.__ModuleLoader__.load({
 
           h('div', { style: { fontSize: 11.5, color: C.dim, lineHeight: 1.6 } },
             'LibGen 有多个镜像，只要有一个可用就能取书；全不可用时检查代理。'),
+        ),
+
+        h(Section, {
+          title: '关于与更新',
+          subtitle: '只查 GitHub Releases 有没有新版本，不会自动安装；升级用 pnpm 或插件管理完成。',
+        },
+          h('div', { style: { display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', fontSize: 12.5 } },
+            h('span', null, `当前版本 v${state.version || '?'}`),
+            updateInfo?.hasUpdate
+              ? h('span', { style: { color: C.ok, fontWeight: 600 } }, `有新版本 v${updateInfo.latest}`)
+              : updateInfo?.checkedAt
+                ? h('span', { style: { color: C.dim } }, '已是最新')
+                : null,
+            h('span', { style: { flex: 1 } }),
+            h('button', {
+              type: 'button',
+              style: button('primary'),
+              disabled: updateBusy || updateInfo?.checking === true,
+              onClick: checkUpdate,
+            }, updateBusy || updateInfo?.checking ? '检查中…' : '检查更新'),
+          ),
+
+          updateInfo?.hasUpdate
+            ? h('div', {
+              style: {
+                border: `1px solid ${C.border}`, borderRadius: 8, padding: '10px 12px',
+                background: C.layer2, display: 'flex', flexDirection: 'column', gap: 8,
+              },
+            },
+              h('div', { style: { fontSize: 12, color: C.text } },
+                `v${updateInfo.latest}${updateInfo.publishedAt ? ` · ${new Date(updateInfo.publishedAt).toLocaleDateString('zh-CN')}` : ''}`),
+              updateInfo.notes
+                ? h('div', {
+                  style: {
+                    fontSize: 11.5, color: C.dim, lineHeight: 1.6,
+                    whiteSpace: 'pre-wrap', maxHeight: 160, overflowY: 'auto',
+                  },
+                }, updateInfo.notes)
+                : null,
+              h('div', null,
+                h('button', {
+                  type: 'button',
+                  style: button(),
+                  onClick: () => openExternal(updateInfo.url || updateInfo.releasesUrl),
+                }, '打开发布页'),
+              ),
+            )
+            : null,
+
+          updateInfo?.error
+            ? h('div', { style: { fontSize: 11.5, color: C.err, lineHeight: 1.6 } },
+              `检查失败：${updateInfo.error}`)
+            : null,
+
+          h('div', { style: { fontSize: 11.5, color: C.dim, lineHeight: 1.6 } },
+            '升级：在 profile 目录执行 pnpm add <release 里的 tgz>，或在插件管理里安装新版；'
+            + '本地模型与书库不会因为升级被清掉。'),
         ),
       )
     }

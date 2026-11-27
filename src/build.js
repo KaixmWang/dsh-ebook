@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { writeZip } from './zip.js'
 
 /** 章节文本的落盘目录（相对书目录）。 */
-export const CHAPTER_DIR = '.dsh-ebook/chapters'
+const CHAPTER_DIR = '.dsh-ebook/chapters'
 
 /** 章标题的识别模式：整行就是标题，命中即开新章。 */
 const HEADING_RE = /^(第[0-9零一二三四五六七八九十百千]+[章节回篇卷部].{0,40}|Chapter\s+\d+.{0,60}|(?:序言|前言|引言|楔子|后记|尾声|目录|附录)(?:[ 　:：].{0,20})?)$/
@@ -40,7 +40,7 @@ function cleanText(text) {
  * @param {string} title 章标题。
  * @returns {string}
  */
-export function chapterFilename(index, title) {
+function chapterFilename(index, title) {
   const number = String(index).padStart(4, '0')
   const safe = String(title).replace(/[\\/:*?"<>|\n\r\t]/g, '_').trim().slice(0, 40)
   return `${number}-${safe || `ch${number}`}.md`

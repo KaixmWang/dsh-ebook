@@ -88,7 +88,7 @@ let proxyUrl = ''
  * 探测 Windows 系统代理（Clash/V2Ray 等设置的 HTTP 代理）。
  * @returns {string} 形如 http://127.0.0.1:7897，没有则空串。
  */
-export function detectSystemProxy() {
+function detectSystemProxy() {
   const fromEnv = process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy
   if (fromEnv) return fromEnv
   if (process.platform !== 'win32') return ''
@@ -372,7 +372,7 @@ export function safeFilename(name, extension) {
  * @param {string} contentType 响应类型。
  * @returns {string}
  */
-export function decodeBody(buf, contentType) {
+function decodeBody(buf, contentType) {
   const match = /charset=([\w-]+)/i.exec(contentType ?? '')
   const charset = (match?.[1] ?? 'utf-8').toLowerCase()
   if (charset === 'gbk' || charset === 'gb2312' || charset === 'gb18030') {

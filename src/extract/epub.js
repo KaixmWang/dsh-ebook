@@ -169,7 +169,7 @@ function pick(opf, tag) {
  * @param {string} html XHTML。
  * @returns {string}
  */
-export function htmlToText(html) {
+function htmlToText(html) {
   return html
     .replace(/<\?xml[\s\S]*?\?>/gi, '')
     .replace(/<!DOCTYPE[\s\S]*?>/gi, '')

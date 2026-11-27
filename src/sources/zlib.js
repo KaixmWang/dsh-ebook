@@ -14,7 +14,7 @@
 import { request, getBuffer, filenameFromHeaders } from '../http.js'
 
 /** 默认站点；实测 z-lib.by 的 eAPI 可用，域名变了用户可在设置里改。 */
-export const DEFAULT_HOST = 'z-lib.by'
+const DEFAULT_HOST = 'z-lib.by'
 
 /** eAPI 要求的 UA（与官方客户端一致的普通浏览器 UA 即可）。 */
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'

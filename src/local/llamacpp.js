@@ -9,12 +9,15 @@
  * 目录布局（都在 $DSH_HOME/dsh-ebook 下，删起来干净）：
  *   models/xiaomi-ocr-0/Xiaomi-OCR-0.Q4_K_M.gguf + .mmproj-bf16.gguf + manifest.json
  *   runtime/llama-<version>/llama-server.exe + *.dll
+ *
+ * 本地服务只监听 127.0.0.1，请求一律用「直连」dispatcher，避免被宿主配置的代理劫持。
  */
 import { spawn } from 'node:child_process'
-import { createServer } from 'node:net'
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:net'
 import { cpus } from 'node:os'
-import { dirname, join } from 'node:path'
+import { delimiter, dirname, join } from 'node:path'
+import { Agent, fetch as undiciFetch } from 'undici'
 import { getText } from '../http.js'
 import { readZip } from '../zip.js'
 import { downloadToFile } from './download.js'
@@ -28,10 +31,11 @@ export const MODEL_INFO = {
   files: ['Xiaomi-OCR-0.Q4_K_M.gguf', 'Xiaomi-OCR-0.mmproj-bf16.gguf'],
 }
 
-/** llama.cpp 的 CPU 运行时（Windows x64）。 */
+/** llama.cpp 的 CPU 运行时（Windows x64）。size 只用于进度条总量估算。 */
 export const RUNTIME_INFO = {
   version: 'b12800',
-  win32: `https://github.com/ggml-org/llama.cpp/releases/download/b12800/llama-b12800-bin-win-cpu-x64.zip`,
+  size: 25_321_144,
+  win32: 'https://github.com/ggml-org/llama.cpp/releases/download/b12800/llama-b12800-bin-win-cpu-x64.zip',
 }
 
 /** HF 镜像：国内直连 huggingface.co 常被墙，先试镜像再试官方。 */
@@ -52,6 +56,37 @@ const PROMPTS = {
   document: 'Extract all information from the main body of the document image and represent it in markdown format, '
     + 'ignoring headers and footers. Tables should be expressed in OTSL format, formulas in the document should be '
     + 'represented using LATEX format, and the parsing should be organized according to the reading order.',
+}
+
+/** 本地请求专用：显式直连，绝不走宿主或系统代理。 */
+let directAgent = null
+
+/**
+ * 取一个「直连」dispatcher。
+ * @returns {Agent}
+ */
+function localAgent() {
+  if (!directAgent) directAgent = new Agent({ connect: { timeout: 10_000 } })
+  return directAgent
+}
+
+/**
+ * 访问本机服务。
+ * @param {string} url 地址（127.0.0.1）。
+ * @param {object} [init] fetch 选项。
+ * @returns {Promise<Response>}
+ */
+function localFetch(url, init = {}) {
+  return undiciFetch(url, { ...init, dispatcher: localAgent() })
+}
+
+/**
+ * 关闭直连 dispatcher（停服务时释放 socket）。
+ */
+async function closeLocalAgent() {
+  const agent = directAgent
+  directAgent = null
+  if (agent) await agent.close().catch(() => {})
 }
 
 /**
@@ -80,20 +115,55 @@ function serverExeName() {
 }
 
 /**
- * 运行时是否已经下好。
- * @param {ReturnType<typeof localPaths>} paths 路径。
- * @returns {{installed:boolean, exe:string, bytes:number, version:string}}
+ * 是否支持自动下载运行库（目前只有 Windows x64 构建）。
+ * @returns {boolean}
  */
-export function runtimeStatus(paths) {
-  const exe = join(paths.runtimeDir, serverExeName())
-  const installed = existsSync(exe)
+export function supportsAutoRuntime() {
+  return process.platform === 'win32'
+}
+
+/**
+ * 在 PATH 里找一个可执行文件。
+ * @param {string} name 文件名（不含路径）。
+ * @returns {string} 绝对路径，找不到为空串。
+ */
+function findInPath(name) {
+  const raw = process.env.PATH ?? process.env.Path ?? ''
+  for (const dir of raw.split(delimiter)) {
+    if (!dir) continue
+    const candidate = join(dir, name)
+    try {
+      if (existsSync(candidate)) return candidate
+    } catch { /* 无权限的目录跳过 */ }
+  }
+  return ''
+}
+
+/**
+ * 运行时状态：优先用插件自己下载的那份，其次找 PATH 里用户自装的 llama-server。
+ * @param {ReturnType<typeof localPaths>} paths 路径。
+ * @returns {{installed:boolean, exe:string, bytes:number, version:string, source:'plugin'|'path'|''}}
+ */
+function runtimeStatus(paths) {
+  const own = join(paths.runtimeDir, serverExeName())
   let bytes = 0
   if (existsSync(paths.runtimeDir)) {
     for (const name of readdirSync(paths.runtimeDir)) {
-      try { bytes += statSync(join(paths.runtimeDir, name)).size } catch { /* 忽略 */ }
+      const file = join(paths.runtimeDir, name)
+      try {
+        const stat = statSync(file)
+        if (stat.isFile()) bytes += stat.size
+      } catch { /* 忽略 */ }
     }
   }
-  return { installed, exe: installed ? exe : '', bytes, version: RUNTIME_INFO.version }
+  if (existsSync(own)) {
+    return { installed: true, exe: own, bytes, version: RUNTIME_INFO.version, source: 'plugin' }
+  }
+  const external = findInPath(serverExeName()) || findInPath('llama-server')
+  if (external) {
+    return { installed: true, exe: external, bytes: 0, version: 'external', source: 'path' }
+  }
+  return { installed: false, exe: '', bytes, version: RUNTIME_INFO.version, source: '' }
 }
 
 /**
@@ -101,7 +171,7 @@ export function runtimeStatus(paths) {
  * @param {ReturnType<typeof localPaths>} paths 路径。
  * @returns {{installed:boolean, bytes:number, files:string[], installedAt:string}}
  */
-export function modelStatus(paths) {
+function modelStatus(paths) {
   const files = []
   let bytes = 0
   for (const name of MODEL_INFO.files) {
@@ -116,17 +186,12 @@ export function modelStatus(paths) {
 }
 
 /**
- * 在镜像/官方之间挑一个能拿到元数据的端点。
+ * 拿模型文件清单与每个文件的体积 / sha256。
  * @param {AbortSignal} [signal] 取消信号。
+ * @param {string[]} [endpoints] 覆盖端点列表（测试用）。
  * @returns {Promise<{base:string, files:Map<string,{size:number, sha:string}>}>}
  */
-/**
- * 拿不到镜像清单时的兜底端点（测试里可以注入）。
- * @param {AbortSignal} [signal] 取消信号。
- * @param {string[]} [endpoints] 覆盖端点列表。
- * @returns {Promise<{base:string, files:Map<string,{size:number, sha:string}>}>}
- */
-async function fetchModelMetadata(signal, endpoints = HF_ENDPOINTS) {
+export async function fetchModelMetadata(signal, endpoints = HF_ENDPOINTS) {
   let lastError
   for (const base of endpoints) {
     try {
@@ -151,18 +216,31 @@ async function fetchModelMetadata(signal, endpoints = HF_ENDPOINTS) {
 }
 
 /**
+ * 判断 zip 条目名是否安全（不允许绝对路径、盘符、上跳）。
+ * @param {string} name 条目名。
+ * @returns {boolean}
+ */
+function isSafeZipEntry(name) {
+  if (!name || name.endsWith('/')) return false
+  const normalized = name.replace(/\\/g, '/')
+  if (normalized.startsWith('/') || /^[a-zA-Z]:/.test(normalized)) return false
+  return !normalized.split('/').includes('..')
+}
+
+/**
  * 下载并解压 llama.cpp 运行时。
  * @param {object} params 参数。
  * @param {ReturnType<typeof localPaths>} params.paths 路径。
  * @param {(line:string)=>void} [params.log] 日志。
  * @param {(p:object)=>void} [params.onProgress] 进度。
  * @param {AbortSignal} [params.signal] 取消信号。
- * @returns {Promise<{exe:string, bytes:number}>}
+ * @param {string} [params.url] 覆盖下载地址（测试用）。
+ * @returns {Promise<{exe:string, files:number}>}
  */
 export async function downloadRuntime(params) {
   const { paths, log = () => {}, onProgress, signal, url } = params
-  if (process.platform !== 'win32') {
-    throw new Error('本地 OCR 的自动运行库目前只提供 Windows x64 版本；其他平台请自行安装 llama.cpp 并把 llama-server 放进 PATH')
+  if (!supportsAutoRuntime()) {
+    throw new Error('自动运行库目前只提供 Windows x64 版本；其他平台请自行安装 llama.cpp 并把 llama-server 放进 PATH')
   }
   const zipPath = join(paths.runtimeDir, 'llama-cpu.zip')
   mkdirSync(paths.runtimeDir, { recursive: true })
@@ -170,6 +248,7 @@ export async function downloadRuntime(params) {
   await downloadToFile({
     url: url ?? RUNTIME_INFO.win32,
     dest: zipPath,
+    expectedBytes: url ? 0 : RUNTIME_INFO.size,
     signal,
     onProgress: info => onProgress?.({ ...info, phase: 'runtime' }),
   })
@@ -177,8 +256,7 @@ export async function downloadRuntime(params) {
   const entries = readZip(readFileSync(zipPath))
   let written = 0
   for (const [name, data] of entries) {
-    // 只取文件，丢掉目录条目与绝对路径
-    if (!name || name.endsWith('/') || name.includes('..')) continue
+    if (!isSafeZipEntry(name)) continue
     const target = join(paths.runtimeDir, name.replace(/\\/g, '/'))
     mkdirSync(dirname(target), { recursive: true })
     writeFileSync(target, data)
@@ -188,22 +266,27 @@ export async function downloadRuntime(params) {
   const exe = join(paths.runtimeDir, serverExeName())
   if (!existsSync(exe)) throw new Error('解压后没找到 llama-server，运行库压缩包结构可能变了')
   log(`llama.cpp 就绪：${written} 个文件`)
-  return { exe, bytes: written }
+  return { exe, files: written }
 }
 
 /**
  * 下载模型权重（GGUF + mmproj）。
+ *
+ * 每个文件单独挑端点：镜像元数据成功但文件 404/限速时，换下一个端点再试。
+ *
  * @param {object} params 参数。
  * @param {ReturnType<typeof localPaths>} params.paths 路径。
  * @param {(line:string)=>void} [params.log] 日志。
  * @param {(p:object)=>void} [params.onProgress] 进度。
  * @param {AbortSignal} [params.signal] 取消信号。
- * @returns {Promise<{bytes:number}>}
+ * @param {string[]} [params.endpoints] 覆盖端点列表（测试用）。
+ * @param {object} [params.meta] 已有的元数据（省一次请求，进度计算用）。
+ * @returns {Promise<{bytes:number, base:string}>}
  */
 export async function downloadModel(params) {
-  const { paths, log = () => {}, onProgress, signal, endpoints } = params
+  const { paths, log = () => {}, onProgress, signal, endpoints = HF_ENDPOINTS, meta: presetMeta } = params
   mkdirSync(paths.modelDir, { recursive: true })
-  const meta = await fetchModelMetadata(signal, endpoints)
+  const meta = presetMeta ?? await fetchModelMetadata(signal, endpoints)
   log(`模型源：${meta.base}`)
 
   let totalBytes = 0
@@ -211,6 +294,7 @@ export async function downloadModel(params) {
     const name = MODEL_INFO.files[i]
     const info = meta.files.get(name)
     if (!info) throw new Error(`模型仓库里找不到 ${name}`)
+
     const fileProgress = p => onProgress?.({
       ...p,
       phase: 'model',
@@ -219,15 +303,30 @@ export async function downloadModel(params) {
       fileCount: MODEL_INFO.files.length,
     })
     log(`下载 ${name}（${(info.size / 1024 / 1024).toFixed(0)}MB）`)
-    const result = await downloadToFile({
-      url: `${meta.base}/${MODEL_INFO.repo}/resolve/main/${name}`,
-      dest: join(paths.modelDir, name),
-      expectedBytes: info.size || 0,
-      sha256: info.sha || undefined,
-      signal,
-      onProgress: fileProgress,
-    })
-    totalBytes += result.bytes
+
+    // 先用元数据来源的端点，失败再换其他端点（镜像挂掉/限速的常见情况）
+    const candidates = [meta.base, ...endpoints.filter(base => base !== meta.base)]
+    let lastError
+    let done = null
+    for (const base of candidates) {
+      try {
+        done = await downloadToFile({
+          url: `${base}/${MODEL_INFO.repo}/resolve/main/${name}`,
+          dest: join(paths.modelDir, name),
+          expectedBytes: info.size || 0,
+          sha256: info.sha || undefined,
+          signal,
+          onProgress: fileProgress,
+        })
+        break
+      } catch (error) {
+        if (signal?.aborted) throw signal.reason ?? error
+        lastError = error
+        log(`从 ${base} 下载 ${name} 失败（${error.message}），换下一个源`)
+      }
+    }
+    if (!done) throw lastError ?? new Error(`下载 ${name} 失败`)
+    totalBytes += done.bytes
   }
 
   writeFileSync(paths.manifest, JSON.stringify({
@@ -240,7 +339,7 @@ export async function downloadModel(params) {
     installedAt: new Date().toISOString(),
   }, null, 2), 'utf8')
   log(`模型就绪（${(totalBytes / 1024 / 1024).toFixed(0)}MB）`)
-  return { bytes: totalBytes }
+  return { bytes: totalBytes, base: meta.base }
 }
 
 /**
@@ -256,8 +355,10 @@ export function removeLocalFiles(paths) {
     removed = true
   }
   // 顺手清掉空的上层目录
-  for (const dir of [join(paths.modelDir, '..'), join(paths.runtimeDir, '..')]) {
-    try { if (existsSync(dir) && readdirSync(dir).length === 0) rmSync(dir, { recursive: true, force: true }) } catch { /* 忽略 */ }
+  for (const dir of [dirname(paths.modelDir), dirname(paths.runtimeDir)]) {
+    try {
+      if (existsSync(dir) && readdirSync(dir).length === 0) rmSync(dir, { recursive: true, force: true })
+    } catch { /* 忽略 */ }
   }
   return { removed }
 }
@@ -289,8 +390,14 @@ function sleep(ms) {
 /** 当前运行的 llama-server。 */
 let current = null
 
+/** 正在启动中的服务：并发调用共用同一个 promise，避免第二个调用者拿到还没就绪的端口。 */
+let starting = null
+
+/** 启动中的子进程（还没就绪，但删服务时要能杀掉）。 */
+let booting = null
+
 /**
- * 启动 llama-server（已启动就直接复用）。
+ * 启动 llama-server（已启动就直接复用；正在启动就等同一个 promise）。
  * @param {object} params 参数。
  * @param {ReturnType<typeof localPaths>} params.paths 路径。
  * @param {(line:string)=>void} [params.log] 日志。
@@ -302,62 +409,84 @@ export async function startServer(params) {
     current.lastUsed = Date.now()
     return { port: current.port }
   }
-  const runtime = runtimeStatus(paths)
-  const model = modelStatus(paths)
-  if (!runtime.installed) throw new Error('还没下载本地 OCR 运行库，请先在设置里点「下载模型」')
-  if (!model.installed) throw new Error('还没下载 Xiaomi-OCR-0 模型，请先在设置里点「下载模型」')
+  if (starting) return starting
 
-  const port = await freePort()
-  const threads = Math.max(2, Math.floor(cpus().length / 2))
-  const args = [
-    '-m', paths.modelFile,
-    '--mmproj', paths.mmprojFile,
-    '-c', '8192',
-    '--host', '127.0.0.1',
-    '--port', String(port),
-    '-ngl', '0',
-    '-t', String(threads),
-    '--jinja',
-  ]
-  log(`启动本地 OCR 服务（127.0.0.1:${port}，${threads} 线程）`)
-  const child = spawn(runtime.exe, args, {
-    cwd: paths.runtimeDir,
-    windowsHide: true,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
-  const tail = []
-  const collect = chunk => {
-    const text = String(chunk)
-    for (const line of text.split('\n')) {
-      const trimmed = line.trim()
-      if (!trimmed) continue
-      tail.push(trimmed)
-      if (tail.length > 40) tail.shift()
-    }
-  }
-  child.stdout?.on('data', collect)
-  child.stderr?.on('data', collect)
+  starting = (async () => {
+    const runtime = runtimeStatus(paths)
+    const model = modelStatus(paths)
+    if (!runtime.installed) throw new Error('还没下载本地 OCR 运行库，请先在设置里点「下载模型」')
+    if (!model.installed) throw new Error('还没下载 Xiaomi-OCR-0 模型，请先在设置里点「下载模型」')
 
-  const server = { port, child, startedAt: Date.now(), lastUsed: Date.now(), timer: null, tail }
-  current = server
-
-  const deadline = Date.now() + START_TIMEOUT_MS
-  while (Date.now() < deadline) {
-    if (child.exitCode !== null) {
-      current = null
-      throw new Error(`llama-server 启动失败（退出码 ${child.exitCode}）：${tail.slice(-3).join(' / ')}`)
-    }
-    try {
-      const response = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(3000) })
-      if (response.ok) {
-        log('本地 OCR 服务就绪')
-        return { port }
+    const port = await freePort()
+    const threads = Math.max(2, Math.floor(cpus().length / 2))
+    const args = [
+      '-m', paths.modelFile,
+      '--mmproj', paths.mmprojFile,
+      '-c', '8192',
+      '--host', '127.0.0.1',
+      '--port', String(port),
+      '-ngl', '0',
+      '-t', String(threads),
+      '--jinja',
+    ]
+    log(`启动本地 OCR 服务（127.0.0.1:${port}，${threads} 线程）`)
+    const child = spawn(runtime.exe, args, {
+      cwd: dirname(runtime.exe),
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    const tail = []
+    const collect = chunk => {
+      const text = String(chunk)
+      for (const line of text.split('\n')) {
+        const trimmed = line.trim()
+        if (!trimmed) continue
+        tail.push(trimmed)
+        if (tail.length > 40) tail.shift()
       }
-    } catch { /* 还在加载模型 */ }
-    await sleep(1000)
+    }
+    child.stdout?.on('data', collect)
+    child.stderr?.on('data', collect)
+
+    // spawn 的异步失败（权限、杀软隔离）走 error 事件；不接住会变成 uncaught 异常打崩宿主
+    let spawnError = null
+    child.on('error', error => { spawnError = error })
+
+    const server = { port, child, startedAt: Date.now(), lastUsed: Date.now(), timer: null, tail }
+    // 就绪之前先挂在 booting 上：它还不是「可用服务」，但删除/卸载时要能杀掉
+    booting = server
+
+    const deadline = Date.now() + START_TIMEOUT_MS
+    while (Date.now() < deadline) {
+      if (spawnError) {
+        booting = null
+        throw new Error(`llama-server 启动失败：${spawnError.message}`)
+      }
+      if (child.exitCode !== null) {
+        booting = null
+        throw new Error(`llama-server 启动失败（退出码 ${child.exitCode}）：${tail.slice(-3).join(' / ')}`)
+      }
+      try {
+        const response = await localFetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(3000) })
+        if (response.ok) {
+          booting = null
+          current = server
+          log('本地 OCR 服务就绪')
+          return { port }
+        }
+      } catch { /* 还在加载模型 */ }
+      await sleep(1000)
+    }
+    booting = null
+    try { child.kill() } catch { /* 已经退出 */ }
+    throw new Error(`本地 OCR 服务 ${START_TIMEOUT_MS / 1000}s 内没有就绪：${tail.slice(-3).join(' / ')}`)
+  })()
+
+  try {
+    return await starting
+  } finally {
+    starting = null
   }
-  stopServer()
-  throw new Error(`本地 OCR 服务 ${START_TIMEOUT_MS / 1000}s 内没有就绪：${tail.slice(-3).join(' / ')}`)
 }
 
 /**
@@ -366,11 +495,17 @@ export async function startServer(params) {
  */
 export async function stopServer() {
   const server = current
+  const pending = booting
   current = null
-  if (!server) return
-  if (server.timer) clearTimeout(server.timer)
-  try { server.child.kill() } catch { /* 已经退出 */ }
-  await sleep(200)
+  booting = null
+  starting = null
+  for (const item of [server, pending]) {
+    if (!item) continue
+    if (item.timer) clearTimeout(item.timer)
+    try { item.child.kill() } catch { /* 已经退出 */ }
+  }
+  if (server || pending) await sleep(200)
+  await closeLocalAgent()
 }
 
 /**
@@ -382,11 +517,8 @@ function scheduleIdleStop(idleMs = IDLE_STOP_MS) {
   if (current.timer) clearTimeout(current.timer)
   current.timer = setTimeout(() => {
     if (!current) return
-    if (Date.now() - current.lastUsed >= idleMs) {
-      stopServer().catch(() => {})
-    } else {
-      scheduleIdleStop(idleMs)
-    }
+    if (Date.now() - current.lastUsed >= idleMs) stopServer().catch(() => {})
+    else scheduleIdleStop(idleMs)
   }, idleMs)
   current.timer.unref?.()
 }
@@ -403,19 +535,20 @@ export function isServerRunning() {
  * 用本地模型识别一页图。
  * @param {object} params 参数。
  * @param {Buffer|Uint8Array} params.png 页面 PNG。
+ * @param {number} params.port 服务端口（由 startServer 返回，避免读全局状态）。
  * @param {'text'|'document'} [params.mode] 识别模式。
  * @param {AbortSignal} [params.signal] 取消信号。
  * @returns {Promise<string>}
  */
 export async function recognizePage(params) {
-  const { png, mode = 'text', signal } = params
-  if (!isServerRunning()) throw new Error('本地 OCR 服务没有运行')
+  const { png, port, mode = 'text', signal } = params
+  if (!port) throw new Error('本地 OCR 服务没有运行')
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(new Error('本地识别超时')), OCR_TIMEOUT_MS)
   const onAbort = () => controller.abort(signal?.reason)
   if (signal) signal.addEventListener('abort', onAbort, { once: true })
   try {
-    const response = await fetch(`http://127.0.0.1:${current.port}/v1/chat/completions`, {
+    const response = await localFetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       signal: controller.signal,
@@ -474,9 +607,11 @@ export function localStatus(paths, settings) {
       version: runtime.version,
       installed: runtime.installed,
       bytes: runtime.bytes,
+      source: runtime.source,
     },
     ready: runtime.installed && model.installed,
     running: isServerRunning(),
     platform: process.platform,
+    canDownloadRuntime: supportsAutoRuntime(),
   }
 }

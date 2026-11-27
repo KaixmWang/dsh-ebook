@@ -347,7 +347,7 @@ const LANG_LABELS = {
  * @param {object} meta 元数据。
  * @returns {Array<{file:string, label:string, kind:'original'|'translated', lang:string, format:string, bytes:number}>}
  */
-export function pushCandidates(dir, meta) {
+function pushCandidates(dir, meta) {
   let files = []
   try { files = readdirSync(dir) } catch { return [] }
   const sizeOf = name => {
@@ -396,7 +396,7 @@ export function pushCandidates(dir, meta) {
  * @param {string} title 书名。
  * @returns {string}
  */
-export function pushUploadName(option, title) {
+function pushUploadName(option, title) {
   if (option.kind === 'translated') {
     const langLabel = LANG_LABELS[option.lang] || option.lang || '译本'
     return `${title}（${langLabel}）.${option.format}`
@@ -528,7 +528,7 @@ function checkDirectory(dir) {
 export function registerSettingsApi(ctx, deps) {
   const {
     settings, getLibrary, switchLibrary, dataDir, llm, log = () => {},
-    ai, translateText, localOcr,
+    ai, translateText, localOcr, updateChecker,
   } = deps
 
   const handler = async (req, res) => {
@@ -553,6 +553,7 @@ export function registerSettingsApi(ctx, deps) {
         sendJson(res, 200, {
           libraryDir: settings.libraryDir || library.root,
           effectiveDir: library.root,
+          version: updateChecker?.status?.().current ?? '',
           platforms: PLATFORMS,
           accounts: settings.listAccounts(),
           books: library.count(),
@@ -1288,6 +1289,30 @@ export function registerSettingsApi(ctx, deps) {
         return
       }
 
+      // ===== 检查更新 =====
+
+      // 当前缓存的更新状态；没有缓存时顺手在后台查一次
+      if (path === '/update' && method === 'GET') {
+        if (!updateChecker) {
+          sendJson(res, 503, { error: '当前环境没有更新检查能力' })
+          return
+        }
+        updateChecker.checkInBackground()
+        sendJson(res, 200, updateChecker.status())
+        return
+      }
+
+      // 强制检查一次（按钮）
+      if (path === '/update/check' && method === 'POST') {
+        if (!updateChecker) {
+          sendJson(res, 503, { error: '当前环境没有更新检查能力' })
+          return
+        }
+        const status = await updateChecker.check({ force: true })
+        sendJson(res, 200, status)
+        return
+      }
+
       // 查询所有 Z-Library 账号的今日配额（eAPI 直接给，不用本地猜）
       if (path === '/accounts/quotas' && method === 'GET') {
         const accounts = settings.rawAccounts()
@@ -1423,4 +1448,4 @@ export function registerSettingsApi(ctx, deps) {
 }
 
 /** 接口前缀（供文档与调试使用）。 */
-export const API_PREFIX = PREFIX
+const API_PREFIX = PREFIX

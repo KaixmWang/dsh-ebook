@@ -17,7 +17,7 @@ import * as zlib from './sources/zlib.js'
  * @param {string} body 响应正文。
  * @returns {boolean}
  */
-export function isBrowserChallenge(body) {
+function isBrowserChallenge(body) {
   return /Verifying your browser|DiamWall|Just a moment|challenge-platform|cf_chl|Enable JavaScript and cookies/i
     .test(String(body ?? '').slice(0, 6000))
 }
@@ -27,7 +27,7 @@ export function isBrowserChallenge(body) {
  * @param {Error} error 异常。
  * @returns {string}
  */
-export function diagnoseNetworkError(error) {
+function diagnoseNetworkError(error) {
   const text = `${error.message} ${error.cause?.code ?? ''} ${error.cause?.message ?? ''}`
   if (/HTTP 513/.test(text)) {
     return '站点网页端要求浏览器验证（DiamWall）。插件走的是 eAPI 接口，不受影响；这里只需确认账号能登录。'

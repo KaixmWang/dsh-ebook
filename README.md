@@ -6,7 +6,7 @@ DSH（DeepSeek Harness）插件。EPUB / PDF 解析后产出 Markdown 分章给�
 扫描件可以走视觉模型，也可以**下载 0.8B 的 Xiaomi-OCR-0 在本地离线识别**。
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.6.0-blue)](https://github.com/KaixmWang/dsh-ebook/releases)
+[![Version](https://img.shields.io/badge/version-0.7.0-blue)](https://github.com/KaixmWang/dsh-ebook/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)](#已知限制)
 
 ## 功能
@@ -19,6 +19,7 @@ DSH（DeepSeek Harness）插件。EPUB / PDF 解析后产出 Markdown 分章给�
 | 阅读 | `ebook_ask` 只把答案带回主对话（省 token），`ebook_read` 需要逐字原文时用 |
 | 书库 | 封面（内嵌图 / PDF 首页 / 豆瓣候选）、简介与评分（微信读书优先、豆瓣兜底）、删除、系统程序打开 |
 | 推送 | 一键推到微信读书书架（COS 三段导入）；有译本时先选推哪个版本；扫码登录 + 今日配额 |
+| 更新 | 设置页「关于与更新」查 GitHub Releases，有新版本给提示与发布页入口（不自动安装） |
 | 阅读器 | OPDS 目录，KOReader / 静读天下 / Moon+ 直接拉书 |
 
 ## 安装
@@ -28,7 +29,7 @@ DSH（DeepSeek Harness）插件。EPUB / PDF 解析后产出 Markdown 分章给�
 **从 GitHub Release 安装（推荐）** —— 在 profile 目录（`~/.dsh/profiles/<name>`，Windows 下是 `C:\Users\<你>\.dsh\profiles\desktop`）里：
 
 ```bash
-pnpm add https://github.com/KaixmWang/dsh-ebook/releases/download/v0.6.0/dsh-ebook-0.6.0.tgz
+pnpm add https://github.com/KaixmWang/dsh-ebook/releases/download/v0.7.0/dsh-ebook-0.7.0.tgz
 ```
 
 再把 `dsh-ebook` 加进同目录 `package.json` 的 `dsh.profile.bundles`：
@@ -119,7 +120,8 @@ Z-Library 走 `/eapi`（官方客户端 JSON 通道），绕开网页端的 Diam
 | 回退 | 本地服务异常时**自动退回**上面配置的视觉模型，入库不中断；两者都不可用才报错 |
 | 体积 | 模型 + 运行库约 730MB，删一次就干净（`models/` 与 `runtime/`） |
 
-CPU 推理：首次加载十几秒，之后按需常驻、**空闲 10 分钟自动退出**把内存还回去。
+CPU 推理：首次加载数秒到十几秒（看磁盘缓存），之后按需常驻、**空闲 10 分钟自动退出**把内存还回去。
+llama-server 默认单 slot，所以本地识别是逐页串行（远端视觉模型才 3 页并发）。
 实测（Q4_K_M，一页 1000×1300 扫描图）**约 11 秒**，中文整段还原、中英混排也正常。
 识别用的引擎会记在 `meta.json` 的 `ocr.engine`（`local-Xiaomi-OCR-0` / `llm-vision` / `mixed`）。
 
@@ -193,6 +195,12 @@ Kindle 推送没有实现：生成 `book.epub` 后用邮箱发到你的 `@kindle
 **书源可达性**
 
 - 一键探测各书源的**实际接口**（不是首页）：LibGen 每个镜像单独列，Z-Library 探 eAPI，Internet Archive 探搜索 API
+
+**关于与更新**
+
+- 显示当前版本，点「检查更新」查 GitHub Releases；有新版本时列出发布说明并可打开发布页
+- 只提示不自动安装：升级照旧走 `pnpm add <release tgz>` 或插件管理（本地模型、书库都不受影响）
+- 结果缓存 6 小时，打开设置页时后台静默检查一次，失败不打扰
 
 ## 配置
 
@@ -280,6 +288,7 @@ pnpm install
 
 | 版本 | 变化 |
 | --- | --- |
+| 0.7.0 | 新增「检查更新」；修复本地 OCR 冷启动并发回退、localhost 被代理、spawn 异常、下载中删除竞态；本地块不再依赖模型列表；支持 PATH 里的 llama-server；清理死代码与仓库杂物 |
 | 0.6.0 | 接入本地 OCR（Xiaomi-OCR-0）：设置里开关 + 下载/删除模型、纯文本/整页 Markdown 两种模式、失败自动回退 |
 | 0.5.3 | 译本与 PDF 成品内嵌封面；新增「阅读模型」与 `ebook_ask`；LICENSE 版权人改为 KaixmWang |
 | 0.5.2 | 推送微信读书时可选原书 / 译本版本，按版本生成入库文件名 |

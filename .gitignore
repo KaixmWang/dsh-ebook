@@ -5,12 +5,16 @@ node_modules/
 # 本地验证脚手架（按需重建）
 .tmp-test/
 _verify/
+_check/
 _pack-check/
 
 # 本地书库与插件数据（凭据在 $DSH_HOME/dsh-ebook，也不该进仓库）
 书库/
 settings.json
 *.part
+
+# 别的插件往当前目录写的状态
+.milancat/
 
 # 编辑器 / 系统
 .DS_Store

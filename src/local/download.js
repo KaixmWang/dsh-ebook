@@ -19,7 +19,7 @@ const MAX_ATTEMPTS = 3
  * @param {string} path 文件路径。
  * @returns {Promise<string>}
  */
-export async function sha256File(path) {
+async function sha256File(path) {
   const hash = createHash('sha256')
   await pipeline(createReadStream(path), new Transform({
     transform(chunk, _encoding, callback) {

@@ -12,6 +12,7 @@ import { registerSettingsApi } from './src/api.js'
 import { configureNetwork } from './src/http.js'
 import { ingest, translateBook } from './src/pipeline.js'
 import { LocalOcr } from './src/local/index.js'
+import { ReleaseChecker } from './src/update.js'
 
 export const name = 'dsh-ebook'
 export const inject = ['tools', 'llm', 'subagents']
@@ -147,6 +148,8 @@ export function apply(ctx, config) {
   const servers = new Map()
   // 本地 OCR（Xiaomi-OCR-0）：模型与 llama.cpp 都由插件自己下载、自己起服务
   const localOcr = new LocalOcr({ dataDir, settings, log })
+  // 检查更新：只查 GitHub Releases 并提示，不自动安装
+  const updateChecker = new ReleaseChecker({ log })
   const tools = createTools({ getConfig, getLibrary, ai, subagents: ctx.subagents, log, servers, localOcr })
 
   ctx.effect(() => {
@@ -195,6 +198,7 @@ export function apply(ctx, config) {
           ai,
           translateText,
           localOcr,
+          updateChecker,
           switchLibrary: dir => {
             current = new Library(dir)
             mkdirSync(current.root, { recursive: true })

@@ -27,7 +27,7 @@ const STALL_TIMEOUT_MS = 45_000
  * @param {Uint8Array} head 响应体开头若干字节。
  * @returns {boolean}
  */
-export function looksLikeHtml(head) {
+function looksLikeHtml(head) {
   const text = Buffer.from(head.subarray(0, 512)).toString('latin1').trim().toLowerCase()
   return text.startsWith('<!doctype') || text.startsWith('<html') || /<head[\s>]|<body[\s>]/.test(text.slice(0, 200))
 }

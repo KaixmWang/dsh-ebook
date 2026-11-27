@@ -13,7 +13,7 @@ const LOC_SIG = 0x04034b50
  * @param {Buffer} buf zip 文件字节。
  * @returns {Array<{name:string, method:number, compressedSize:number, size:number, offset:number}>}
  */
-export function listEntries(buf) {
+function listEntries(buf) {
   // EOCD 在文件尾部，注释最长 65535，从后往前找
   let eocd = -1
   const start = Math.max(0, buf.length - 0xffff - 22)
@@ -46,7 +46,7 @@ export function listEntries(buf) {
  * @param {{name:string, method:number, compressedSize:number, offset:number}} entry 条目。
  * @returns {Buffer}
  */
-export function readEntry(buf, entry) {
+function readEntry(buf, entry) {
   const p = entry.offset
   if (buf.readUInt32LE(p) !== LOC_SIG) throw new Error(`zip 条目头损坏: ${entry.name}`)
   const nameLen = buf.readUInt16LE(p + 26)
@@ -136,7 +136,7 @@ let CRC_TABLE = null
  * @param {Buffer} buf 数据。
  * @returns {number}
  */
-export function crc32(buf) {
+function crc32(buf) {
   if (!CRC_TABLE) {
     CRC_TABLE = new Int32Array(256)
     for (let i = 0; i < 256; i++) {

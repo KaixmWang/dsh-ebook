@@ -1,6 +1,6 @@
 {
   "name": "dsh-ebook",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "type": "module",
   "description": "给人和 AI 读的电子书库：多源搜书下载、扫描件 OCR、逐章翻译、封面与简介自动补齐、推送微信读书",
   "main": "index.js",
@@ -31,7 +31,7 @@
     "src",
     "cordis.patch.yml",
     "locale/*.json",
-    "docs",
+    "docs/DETAIL.md",
     "icon.svg",
     "README.md",
     "LICENSE"

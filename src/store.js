@@ -1,5 +1,5 @@
 /** 书库：磁盘布局、索引、元数据。 */
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
 /** 插件私有数据子目录，存放元数据、章节索引、分章正文与译本。 */
@@ -13,7 +13,7 @@ const SOURCE_EXT = /\.(epub|pdf|mobi|azw3|txt)$/i
  * @param {string} title 书名。
  * @returns {string}
  */
-export function slugify(title) {
+function slugify(title) {
   const cleaned = String(title)
     .replace(/[\\/:*?"<>|\n\r\t]/g, ' ')
     .replace(/\s+/g, ' ')
@@ -202,18 +202,6 @@ export class Library {
    */
   count() {
     return this.dirNames().filter(name => this.isBookDir(join(this.root, name))).length
-  }
-
-  /**
-   * 删除一本书。
-   * @param {string} name 书名。
-   * @returns {boolean}
-   */
-  remove(name) {
-    const dir = this.bookDir(name)
-    if (!existsSync(dir)) return false
-    rmSync(dir, { recursive: true, force: true })
-    return true
   }
 
   /**
