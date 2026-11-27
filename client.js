@@ -1322,14 +1322,8 @@ window.__ModuleLoader__.load({
 
       useEffect(() => { loadModels() }, [loadModels])
       useEffect(() => { loadLocalOcr() }, [loadLocalOcr])
+      // 只读缓存；联网检查由用户点按钮触发（POST /update/check）
       useEffect(() => { loadUpdate() }, [loadUpdate])
-
-      // 后台检查更新时轮询结果，拿到就停
-      useEffect(() => {
-        if (!updateInfo?.checking) return
-        const timer = setInterval(loadUpdate, 2000)
-        return () => clearInterval(timer)
-      }, [updateInfo?.checking, loadUpdate])
 
       // 下载中每秒刷新一次进度；下完自动停
       useEffect(() => {
@@ -2097,14 +2091,14 @@ window.__ModuleLoader__.load({
               ? h('span', { style: { color: C.ok, fontWeight: 600 } }, `有新版本 v${updateInfo.latest}`)
               : updateInfo?.checkedAt
                 ? h('span', { style: { color: C.dim } }, '已是最新')
-                : null,
+                : h('span', { style: { color: C.dim } }, '尚未检查'),
             h('span', { style: { flex: 1 } }),
             h('button', {
               type: 'button',
               style: button('primary'),
-              disabled: updateBusy || updateInfo?.checking === true,
+              disabled: updateBusy,
               onClick: checkUpdate,
-            }, updateBusy || updateInfo?.checking ? '检查中…' : '检查更新'),
+            }, updateBusy ? '检查中…' : '检查更新'),
           ),
 
           updateInfo?.hasUpdate

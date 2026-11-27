@@ -175,13 +175,4 @@ export class ReleaseChecker {
 
     return this.checking
   }
-
-  /**
-   * 后台检查（不阻塞调用方，供 GET 接口触发）。
-   * @returns {void}
-   */
-  checkInBackground() {
-    if (this.checking || this.fresh) return
-    this.check().catch(() => {})
-  }
 }

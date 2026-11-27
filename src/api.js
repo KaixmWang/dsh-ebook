@@ -1291,13 +1291,12 @@ export function registerSettingsApi(ctx, deps) {
 
       // ===== 检查更新 =====
 
-      // 当前缓存的更新状态；没有缓存时顺手在后台查一次
+      // 只回缓存，不主动联网：联网只发生在用户点「检查更新」时
       if (path === '/update' && method === 'GET') {
         if (!updateChecker) {
           sendJson(res, 503, { error: '当前环境没有更新检查能力' })
           return
         }
-        updateChecker.checkInBackground()
         sendJson(res, 200, updateChecker.status())
         return
       }
